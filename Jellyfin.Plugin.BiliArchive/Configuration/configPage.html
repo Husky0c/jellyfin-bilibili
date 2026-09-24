@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>Bilibili 收藏归档</title></head>
+<body>
+<div id="BiliArchivePage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-select">
+  <div data-role="content"><div class="content-primary">
+    <h2>Bilibili 收藏归档</h2>
+    <p>视频下载成功后会永久保留；取消收藏不会删除本地文件。仅下载此账号有权访问的内容。</p>
+    <h3>1. 登录 Bilibili</h3>
+    <p id="biliLoginStatus">正在检查登录状态…</p>
+    <button id="biliQrButton" is="emby-button" type="button" class="raised emby-button">扫码登录</button>
+    <button id="biliLogoutButton" is="emby-button" type="button" class="emby-button">退出登录</button>
+    <div><img id="biliQrImage" alt="Bilibili 登录二维码" style="display:none;width:240px;height:240px;background:white;margin:1em 0"></div>
+    <p id="biliQrHint"></p>
+    <h3>2. 选择收藏夹</h3>
+    <button id="biliFoldersButton" is="emby-button" type="button" class="emby-button">刷新收藏夹</button>
+    <div id="biliFolders"></div>
+    <h3>3. 归档设置</h3>
+    <form id="biliArchiveForm">
+      <div class="inputContainer">
+        <label class="inputLabel" for="biliArchivePath">归档目录（Jellyfin 容器内绝对路径）</label>
+        <input id="biliArchivePath" is="emby-input" type="text" placeholder="/media/bilibili" required>
+        <div class="fieldDescription">先在飞牛 Docker 中将 NAS 文件夹挂载给 Jellyfin 容器，并确保容器可写。之后将这个路径作为电影媒体库添加到 Jellyfin。</div>
+      </div>
+      <div class="inputContainer">
+        <label class="inputLabel" for="biliFfmpegPath">FFmpeg 路径（留空自动查找）</label>
+        <input id="biliFfmpegPath" is="emby-input" type="text" placeholder="/usr/lib/jellyfin-ffmpeg/ffmpeg">
+      </div>
+      <div class="selectContainer">
+        <label class="selectLabel" for="biliQuality">最高画质</label>
+        <select id="biliQuality" is="emby-select">
+          <option value="64">720P</option><option value="80">1080P</option><option value="112">1080P+</option><option value="120">4K</option>
+        </select>
+      </div>
+      <div class="inputContainer">
+        <label class="inputLabel" for="biliMinScan">活跃时最短检查间隔（分钟）</label>
+        <input id="biliMinScan" is="emby-input" type="number" min="15" max="240" step="15" required>
+      </div>
+      <div class="inputContainer">
+        <label class="inputLabel" for="biliMaxScan">空闲时最长检查间隔（分钟）</label>
+        <input id="biliMaxScan" is="emby-input" type="number" min="15" max="1440" step="15" required>
+      </div>
+      <button is="emby-button" type="submit" class="raised button-submit emby-button">保存设置</button>
+    </form>
+    <p>常规扫描只比较收藏夹 BV 清单；旧内容按页轮换复核。后台任务每 15 分钟检查是否到期，实际请求间隔随活跃度在上面的范围内调整。Cookie 过期需重新扫码；风控时会自动冷却。会员画质仅在账号有权限时可下载。</p>
+    <button id="biliRunButton" is="emby-button" type="button" class="raised emby-button">立即同步</button>
+    <p id="biliRunHint"></p>
+    <h3>归档状态</h3>
+    <p id="biliSummary"></p>
+    <button id="biliRecordsButton" is="emby-button" type="button" class="emby-button">刷新记录</button>
+    <div id="biliRecords"></div>
+  </div></div>
+  <script type="text/javascript">
+    (function () {
+      const page = document.querySelector('#BiliArchivePage');
+      const pluginId = '69080230-518d-47b1-b8a0-70854398506e';
+      let config = null;
+      let pollTimer = null;
+      let currentQrKey = null;
+      let active = false;
+      const byId = id => page.querySelector('#' + id);
+      const endpoint = path => ApiClient.getUrl('BiliArchive/' + path);
+      const request = (path, data) => ApiClient.ajax({
+        type: 'POST', url: endpoint(path), dataType: 'json', contentType: 'application/json',
+        data: JSON.stringify(data || {})
+      });
+      const errorText = error => error && (error.statusText || error.message) || String(error);
+
+      async function refreshStatus() {
+        try {
+          const state = await ApiClient.getJSON(endpoint('status'));
+          byId('biliLoginStatus').textContent = state.loggedIn ? '已登录，UID：' + state.mid : '未登录或 Cookie 已过期';
+          byId('biliSummary').textContent = '已归档 ' + state.completed + ' 项；待处理 ' + state.pending + ' 项；失败 ' + state.failed + ' 项；失效 ' + state.unavailable + ' 项' +
+            (state.running ? '；正在同步' : '') + (state.pausedUntil ? '；风控冷却至 ' + new Date(state.pausedUntil).toLocaleString() : '') +
+            (state.nextCheckAt ? '；下次收藏检查约 ' + new Date(state.nextCheckAt).toLocaleString() : '');
+          if (state.loggedIn) await refreshFolders();
+        } catch (error) { byId('biliLoginStatus').textContent = '状态检查失败：' + errorText(error); }
+      }
+
+      async function refreshFolders() {
+        const container = byId('biliFolders');
+        container.textContent = '正在加载…';
+        try {
+          const folders = await ApiClient.getJSON(endpoint('folders'));
+          container.replaceChildren();
+          if (!folders.length) { container.textContent = '没有可用的自建收藏夹。'; return; }
+          for (const folder of folders) {
+            const folderId = folder.Id ?? folder.id;
+            const title = folder.Title ?? folder.title;
+            const count = folder.Count ?? folder.count;
+            const label = document.createElement('label');
+            label.style.display = 'block';
+            label.style.margin = '.5em 0';
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.value = folderId;
+            checkbox.checked = (config.FolderIds || []).map(String).includes(String(folderId));
+            label.append(checkbox, document.createTextNode(' ' + title + '（' + count + '）'));
+            container.appendChild(label);
+          }
+        } catch (error) { container.textContent = '收藏夹加载失败：' + errorText(error); }
+      }
+
+      async function pollQr() {
+        if (!active || !currentQrKey) return;
+        try {
+          const result = await request('qr/poll', { key: currentQrKey });
+          const code = result.Code ?? result.code;
+          if (code === 0) {
+            currentQrKey = null;
+            byId('biliQrImage').style.display = 'none';
+            byId('biliQrHint').textContent = '登录成功。';
+            await refreshStatus();
+            return;
+          }
+          if (code === 86038) {
+            currentQrKey = null;
+            byId('biliQrHint').textContent = '二维码已过期，请重新生成。';
+            return;
+          }
+          byId('biliQrHint').textContent = code === 86090 ? '已扫码，请在 Bilibili App 中确认。' : '请使用 Bilibili App 扫码。';
+        } catch (error) { byId('biliQrHint').textContent = '登录检查失败：' + errorText(error); }
+        if (active && currentQrKey) pollTimer = setTimeout(pollQr, 2500);
+      }
+
+      byId('biliQrButton').addEventListener('click', async function () {
+        clearTimeout(pollTimer);
+        currentQrKey = null;
+        byId('biliQrHint').textContent = '正在生成二维码…';
+        try {
+          const result = await request('qr');
+          currentQrKey = result.key;
+          byId('biliQrImage').src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(result.svg);
+          byId('biliQrImage').style.display = 'block';
+          byId('biliQrHint').textContent = '请使用 Bilibili App 扫码。';
+          pollQr();
+        } catch (error) { byId('biliQrHint').textContent = '生成失败：' + errorText(error); }
+      });
+
+      byId('biliLogoutButton').addEventListener('click', async function () {
+        clearTimeout(pollTimer); currentQrKey = null;
+        try { await request('logout'); await refreshStatus(); }
+        catch (error) { byId('biliLoginStatus').textContent = '退出失败：' + errorText(error); }
+      });
+      byId('biliFoldersButton').addEventListener('click', refreshFolders);
+      byId('biliRunButton').addEventListener('click', async function () {
+        byId('biliRunHint').textContent = '正在启动…';
+        try {
+          await request('run');
+          byId('biliRunHint').textContent = '同步已启动，可刷新下方记录查看进度。';
+          await refreshStatus();
+        } catch (error) { byId('biliRunHint').textContent = '启动失败：' + errorText(error); }
+      });
+      byId('biliRecordsButton').addEventListener('click', async function () {
+        const container = byId('biliRecords');
+        container.textContent = '正在加载…';
+        try {
+          const records = await ApiClient.getJSON(endpoint('records'));
+          container.replaceChildren();
+          for (const record of records.slice(0, 100)) {
+            const row = document.createElement('div');
+            const status = record.Status ?? record.status;
+            const bvid = record.Bvid ?? record.bvid;
+            const cid = record.Cid ?? record.cid;
+            const title = record.Title ?? record.title;
+            const error = record.Error ?? record.error;
+            row.textContent = status + ' · ' + bvid + ' / ' + cid + ' · ' + title + (error ? ' · ' + error : '');
+            row.style.margin = '.35em 0';
+            container.appendChild(row);
+          }
+          if (!records.length) container.textContent = '暂无归档记录。';
+        } catch (error) { container.textContent = '加载失败：' + errorText(error); }
+      });
+
+      byId('biliArchiveForm').addEventListener('submit', async function (event) {
+        event.preventDefault();
+        try {
+          const current = await ApiClient.getPluginConfiguration(pluginId);
+          current.ArchivePath = byId('biliArchivePath').value.trim();
+          current.FfmpegPath = byId('biliFfmpegPath').value.trim();
+          current.Quality = Number(byId('biliQuality').value);
+          current.MinScanMinutes = Number(byId('biliMinScan').value);
+          current.MaxScanMinutes = Number(byId('biliMaxScan').value);
+          if (current.MaxScanMinutes < current.MinScanMinutes) throw new Error('最长间隔不能小于最短间隔。');
+          current.FolderIds = Array.from(byId('biliFolders').querySelectorAll('input:checked')).map(x => Number(x.value));
+          const result = await ApiClient.updatePluginConfiguration(pluginId, current);
+          config = current;
+          Dashboard.processPluginConfigurationUpdateResult(result);
+        } catch (error) { Dashboard.alert('保存失败：' + errorText(error)); }
+      });
+
+      page.addEventListener('pageshow', async function () {
+        active = true;
+        Dashboard.showLoadingMsg();
+        try {
+          config = await ApiClient.getPluginConfiguration(pluginId);
+          byId('biliArchivePath').value = config.ArchivePath || '';
+          byId('biliFfmpegPath').value = config.FfmpegPath || '';
+          byId('biliQuality').value = String(config.Quality || 80);
+          byId('biliMinScan').value = String(config.MinScanMinutes || 30);
+          byId('biliMaxScan').value = String(config.MaxScanMinutes || 240);
+          await refreshStatus();
+        } finally { Dashboard.hideLoadingMsg(); }
+      });
+      page.addEventListener('pagehide', function () { active = false; clearTimeout(pollTimer); currentQrKey = null; });
+    })();
+  </script>
+</div>
+</body>
+</html>

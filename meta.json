@@ -1,0 +1,17 @@
+{
+  "category": "General",
+  "description": "自动将 Bilibili 账号收藏夹中的视频下载到本地，取消收藏后仍保留，按 BV/CID 去重。",
+  "guid": "69080230-518d-47b1-b8a0-70854398506e",
+  "name": "Bilibili 收藏归档",
+  "owner": "HUSKY0C",
+  "version": "1.1.0.2",
+  "status": "Active",
+  "autoUpdate": false,
+  "targetAbi": "10.10.7.0",
+  "assemblies": [
+    "Jellyfin.Plugin.BiliArchive.dll",
+    "QRCoder.dll",
+    "System.Drawing.Common.dll",
+    "Microsoft.Win32.SystemEvents.dll"
+  ]
+}
