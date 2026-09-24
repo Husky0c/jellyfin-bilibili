@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Jellyfin.Plugin.BiliArchive;
 using QRCoder;
 
@@ -16,6 +17,20 @@ var second = new ArchiveStore(folder);
 var record = await second.GetAsync("BV1xx411c7mD", 123, CancellationToken.None);
 if (record?.Status != "completed" || record.FilePath is null)
     throw new Exception("BV/CID 完成状态未持久化。");
+const long largeCid = 3_000_000_123L;
+using (var videoJson = JsonDocument.Parse("""{"title":"大 CID 测试","pic":"","pages":[{"cid":3000000123,"page":1,"part":"正片"}]}"""))
+{
+    var video = BiliApi.ParseVideoInfo("BV1xx411c7mD", videoJson.RootElement);
+    if (video.Pages.Count != 1 || video.Pages[0].Cid != largeCid)
+        throw new Exception("超过 Int32 范围的 CID 解析失败。");
+}
+await second.SaveAsync(new ArchiveRecord
+{
+    Bvid = "BV1xx411c7mE", Cid = largeCid, Title = "大 CID 测试", Status = "completed",
+    FilePath = "/media/bilibili/BV1xx411c7mE/P01-3000000123/video.mp4"
+}, CancellationToken.None);
+if ((await new ArchiveStore(folder).GetAsync("BV1xx411c7mE", largeCid, CancellationToken.None))?.Cid != largeCid)
+    throw new Exception("超过 Int32 范围的 CID 状态未持久化。");
 await second.ClearCookieAsync(CancellationToken.None);
 var third = new ArchiveStore(folder);
 if ((await third.GetAsync("BV1xx411c7mD", 123, CancellationToken.None))?.Status != "completed")
@@ -74,4 +89,4 @@ SyncPlanner.ApplyMembership(plannerFolder, plannerState, ["BV1xx411c7mD", b], ar
     new HashSet<string>(), baseTime.AddMinutes(5), 30, 240, 1);
 if (!plannerState.Pending[b].IsNewFavorite) throw new Exception("重新收藏应提高待下载项优先级。");
 
-Console.WriteLine("PASS: BV/CID、增量游标与重试队列持久化；差异检测、退避、配置页、二维码。");
+Console.WriteLine("PASS: 大 CID 解析与持久化；BV/CID、增量游标与重试队列持久化；差异检测、退避、配置页、二维码。");

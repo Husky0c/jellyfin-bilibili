@@ -12,7 +12,7 @@ public sealed record FavoriteFolder(long Id, string Title, int Count);
 public sealed record FavoriteVideo(string Bvid, string Title, bool Available, int PageCount);
 public sealed record FavoritePage(IReadOnlyList<FavoriteVideo> Items, bool HasMore);
 public sealed record FavoriteIds(IReadOnlyList<string> Bvids, int ResourceCount);
-public sealed record VideoPage(int Cid, int Page, string Part);
+public sealed record VideoPage(long Cid, int Page, string Part);
 public sealed record VideoInfo(string Bvid, string Title, string Cover, IReadOnlyList<VideoPage> Pages);
 public sealed record DashStream(string Url, int Quality, long Bandwidth);
 public sealed record PlayStreams(DashStream Video, DashStream Audio);
@@ -141,14 +141,18 @@ public sealed class BiliApi
     public async Task<VideoInfo> GetVideoAsync(string bvid, CancellationToken ct)
     {
         using var json = await GetJsonAsync("https://api.bilibili.com/x/web-interface/view?bvid=" + Uri.EscapeDataString(bvid), true, ct).ConfigureAwait(false);
-        var data = GetData(json.RootElement);
+        return ParseVideoInfo(bvid, GetData(json.RootElement));
+    }
+
+    internal static VideoInfo ParseVideoInfo(string bvid, JsonElement data)
+    {
         var pages = data.GetProperty("pages").EnumerateArray()
-            .Select(x => new VideoPage(x.GetProperty("cid").GetInt32(), x.GetProperty("page").GetInt32(), x.GetProperty("part").GetString() ?? string.Empty))
+            .Select(x => new VideoPage(x.GetProperty("cid").GetInt64(), x.GetProperty("page").GetInt32(), x.GetProperty("part").GetString() ?? string.Empty))
             .ToArray();
         return new VideoInfo(bvid, data.GetProperty("title").GetString() ?? bvid, data.GetProperty("pic").GetString() ?? string.Empty, pages);
     }
 
-    public async Task<PlayStreams> GetPlayStreamsAsync(string bvid, int cid, int maxQuality, CancellationToken ct)
+    public async Task<PlayStreams> GetPlayStreamsAsync(string bvid, long cid, int maxQuality, CancellationToken ct)
     {
         using var nav = await GetJsonAsync("https://api.bilibili.com/x/web-interface/nav", true, ct).ConfigureAwait(false);
         var wbi = GetData(nav.RootElement).GetProperty("wbi_img");

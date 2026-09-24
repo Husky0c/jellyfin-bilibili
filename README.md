@@ -18,7 +18,7 @@
 
 ```powershell
 dotnet restore Jellyfin.Plugin.BiliArchive/Jellyfin.Plugin.BiliArchive.csproj --configfile NuGet.Config
-dotnet publish Jellyfin.Plugin.BiliArchive/Jellyfin.Plugin.BiliArchive.csproj -c Release --no-restore -o dist/BiliArchive_1.1.0.2
+dotnet publish Jellyfin.Plugin.BiliArchive/Jellyfin.Plugin.BiliArchive.csproj -c Release --no-restore -o dist/BiliArchive_1.1.0.3
 ```
 
 将根目录的 `meta.json` 复制到上述输出目录。安装时使用插件 DLL、同名 `.deps.json`、`QRCoder.dll`、`System.Drawing.Common.dll`、`Microsoft.Win32.SystemEvents.dll` 和 `meta.json` 这六个文件；不要把 `runtimes` 目录或 Jellyfin 自身依赖一起放进插件目录。NuGet 依赖固定为 Jellyfin 10.10.7 和 QRCoder 1.7.0。插件不能直接用于 Jellyfin 10.11/12。
@@ -26,14 +26,14 @@ dotnet publish Jellyfin.Plugin.BiliArchive/Jellyfin.Plugin.BiliArchive.csproj -c
 ## 部署到 Jellyfin Docker（飞牛 NAS 示例）
 
 1. 在 NAS 上准备一个独立目录，并将其以读写方式挂载进 Jellyfin 容器，例如映射为 `/media/bilibili`。确认容器用户有写入权限；不要直接把整个已有媒体库当归档目录。FFmpeg 路径因镜像而异，可在插件页面手动指定。
-2. 找到 Jellyfin 容器的 `/config` 对应的 NAS 目录。将上面列出的六个构建产物放到其 `plugins/BiliArchive_1.1.0.2/` 子目录；若使用另行提供的 ZIP 包，解压后也应是同样的六个文件。不要多套一层目录。
+2. 找到 Jellyfin 容器的 `/config` 对应的 NAS 目录。将上面列出的六个构建产物放到其 `plugins/BiliArchive_1.1.0.3/` 子目录；若使用另行提供的 ZIP 包，解压后也应是同样的六个文件。不要多套一层目录。
 3. 重启 Jellyfin 容器，确认插件页面出现“Bilibili 收藏归档”。若服务不能启动，移走刚才添加的插件文件夹并重启。
 4. 在插件页面扫码登录，刷新并勾选收藏夹，设置容器内归档目录和检查间隔后保存。
 5. 点击插件页面“立即同步”，确认生成 MP4 与 NFO；然后在 Jellyfin 添加电影媒体库指向同一容器内目录。手动运行 Jellyfin 计划任务只执行到期检查；“立即同步”会忽略普通到期时间，但不会绕过风控冷却。
 
 不建议在未确认 Docker 挂载与插件启动日志前直接对生产媒体目录进行首次同步。先用独立测试目录、小收藏夹验证。
 
-若曾安装 `1.1.0.0` 且状态为 `Malfunctioned`，请先备份旧插件目录，不要清理归档视频或插件数据目录；将新版解压到单独的 `BiliArchive_1.1.0.2` 目录后重启。旧包包含多个平台同名运行库，Jellyfin 可能在启动时重复加载 DLL。若新版仍失败，请查看 Jellyfin 启动日志中 `BiliArchive` 附近的第一条异常。
+若曾安装 `1.1.0.0` 且状态为 `Malfunctioned`，请先备份旧插件目录，不要清理归档视频或插件数据目录；将新版解压到单独的 `BiliArchive_1.1.0.3` 目录后重启。旧包包含多个平台同名运行库，Jellyfin 可能在启动时重复加载 DLL。若新版仍失败，请查看 Jellyfin 启动日志中 `BiliArchive` 附近的第一条异常。
 
 ## 存档行为与限制
 

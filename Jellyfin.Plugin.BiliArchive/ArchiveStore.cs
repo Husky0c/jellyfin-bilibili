@@ -6,7 +6,7 @@ namespace Jellyfin.Plugin.BiliArchive;
 public sealed class ArchiveRecord
 {
     public string Bvid { get; set; } = string.Empty;
-    public int Cid { get; set; }
+    public long Cid { get; set; }
     public string Title { get; set; } = string.Empty;
     public string Status { get; set; } = "pending";
     public string? FilePath { get; set; }
@@ -65,7 +65,7 @@ public sealed class ArchiveStore
         finally { _gate.Release(); }
     }
 
-    public async Task<ArchiveRecord?> GetAsync(string bvid, int cid, CancellationToken ct)
+    public async Task<ArchiveRecord?> GetAsync(string bvid, long cid, CancellationToken ct)
     {
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -110,7 +110,7 @@ public sealed class ArchiveStore
             : [];
     }
 
-    private static string Key(string bvid, int cid) => bvid + ":" + cid;
+    private static string Key(string bvid, long cid) => bvid + ":" + cid;
     private static ArchiveRecord Clone(ArchiveRecord x) => new()
     {
         Bvid = x.Bvid, Cid = x.Cid, Title = x.Title, Status = x.Status,

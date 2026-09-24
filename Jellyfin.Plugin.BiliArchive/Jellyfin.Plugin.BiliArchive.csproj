@@ -7,7 +7,7 @@
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <NoWarn>$(NoWarn);1591</NoWarn>
     <AssemblyName>Jellyfin.Plugin.BiliArchive</AssemblyName>
-    <Version>1.1.0.2</Version>
+    <Version>1.1.0.3</Version>
   </PropertyGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
@@ -17,5 +17,6 @@
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Configuration\configPage.html" />
+    <InternalsVisibleTo Include="SmokeTests" />
   </ItemGroup>
 </Project>
