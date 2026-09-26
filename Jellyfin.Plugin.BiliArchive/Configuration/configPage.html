@@ -1,12 +1,12 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><title>Bilibili 收藏归档</title>
-<style>
-  #BiliArchivePage .biliActionButton { background-color: #165a9b !important; color: #fff !important; }
-  #BiliArchivePage .biliActionButton:hover, #BiliArchivePage .biliActionButton:focus { background-color: #104775 !important; color: #fff !important; }
-</style></head>
+<head><meta charset="utf-8"><title>Bilibili 收藏归档</title></head>
 <body>
 <div id="BiliArchivePage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-select">
+  <style>
+    #BiliArchivePage .biliActionButton { background-color: #165a9b !important; color: #fff !important; }
+    #BiliArchivePage .biliActionButton:hover, #BiliArchivePage .biliActionButton:focus { background-color: #104775 !important; color: #fff !important; }
+  </style>
   <div data-role="content"><div class="content-primary">
     <h2>Bilibili 收藏归档</h2>
     <p id="biliPluginVersion"></p>
@@ -14,11 +14,11 @@
     <h3>1. 登录 Bilibili</h3>
     <p id="biliLoginStatus">正在检查登录状态…</p>
     <button id="biliQrButton" is="emby-button" type="button" class="raised emby-button">扫码登录</button>
-    <button id="biliLogoutButton" is="emby-button" type="button" class="raised emby-button biliActionButton">退出登录</button>
+    <button id="biliLogoutButton" is="emby-button" type="button" class="raised emby-button biliActionButton" style="background-color:#165a9b;color:#fff">退出登录</button>
     <div><img id="biliQrImage" alt="Bilibili 登录二维码" style="display:none;width:240px;height:240px;background:white;margin:1em 0"></div>
     <p id="biliQrHint"></p>
     <h3>2. 选择收藏夹</h3>
-    <button id="biliFoldersButton" is="emby-button" type="button" class="raised emby-button biliActionButton">刷新收藏夹</button>
+    <button id="biliFoldersButton" is="emby-button" type="button" class="raised emby-button biliActionButton" style="background-color:#165a9b;color:#fff">刷新收藏夹</button>
     <div id="biliFolders"></div>
     <h3>3. 归档设置</h3>
     <form id="biliArchiveForm">
@@ -52,7 +52,7 @@
     <p id="biliRunHint"></p>
     <h3>归档状态</h3>
     <p id="biliSummary"></p>
-    <button id="biliRecordsButton" is="emby-button" type="button" class="raised emby-button biliActionButton">刷新记录</button>
+    <button id="biliRecordsButton" is="emby-button" type="button" class="raised emby-button biliActionButton" style="background-color:#165a9b;color:#fff">刷新记录</button>
     <div id="biliRecords"></div>
   </div></div>
   <script type="text/javascript">
