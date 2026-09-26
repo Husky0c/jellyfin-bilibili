@@ -80,7 +80,7 @@ public sealed class ArchiveService
 
             var pollDue = config.FolderIds.Any(id => force || state.Folders[id].NextCheckAt <= now);
             var reconcileDue = config.FolderIds.Any(id => force || state.Folders[id].NextReconcileAt <= now);
-            var workDue = state.Pending.Values.Any(x => x.NextAttemptAt <= now && IsSelected(x.Bvid, state, config));
+            var workDue = state.Pending.Values.Any(x => x.NextAttemptAt <= now && IsSelected(x.Bvid, state, config.FolderIds));
             if (!pollDue && !reconcileDue && !workDue)
             {
                 progress?.Report(100);
@@ -143,7 +143,7 @@ public sealed class ArchiveService
                     }
                 }
 
-                await ProcessPendingAsync(state, config, progress, ct).ConfigureAwait(false);
+                await ProcessPendingAsync(state, config, progress, force, ct).ConfigureAwait(false);
                 state.RateLimitCount = 0;
                 state.PausedUntil = null;
                 await _syncStore.SaveAsync(state, ct).ConfigureAwait(false);
@@ -221,11 +221,9 @@ public sealed class ArchiveService
         folderState.NextReconcileAt = now.Add(page.HasMore ? TimeSpan.FromHours(3) : TimeSpan.FromDays(1));
     }
 
-    private async Task ProcessPendingAsync(SyncState state, PluginConfiguration config, IProgress<double>? progress, CancellationToken ct)
+    private async Task ProcessPendingAsync(SyncState state, PluginConfiguration config, IProgress<double>? progress, bool force, CancellationToken ct)
     {
-        var due = state.Pending.Values.Where(x => x.NextAttemptAt <= DateTimeOffset.UtcNow)
-            .Where(x => IsSelected(x.Bvid, state, config))
-            .OrderByDescending(x => x.IsNewFavorite).ThenBy(x => x.DiscoveredAt).Take(10).ToArray();
+        var due = SelectPending(state, config.FolderIds, DateTimeOffset.UtcNow, force);
         for (var index = 0; index < due.Length; index++)
         {
             ct.ThrowIfCancellationRequested();
@@ -285,6 +283,11 @@ public sealed class ArchiveService
         }
     }
 
+    internal static PendingVideo[] SelectPending(SyncState state, IReadOnlyCollection<long> folderIds, DateTimeOffset now, bool force) =>
+        state.Pending.Values.Where(x => force || x.NextAttemptAt <= now)
+            .Where(x => IsSelected(x.Bvid, state, folderIds))
+            .OrderByDescending(x => x.IsNewFavorite).ThenBy(x => x.NextAttemptAt).ThenBy(x => x.DiscoveredAt).Take(10).ToArray();
+
     private static void ScheduleRetry(PendingVideo pending, bool unavailable = false)
     {
         pending.Failures++;
@@ -295,8 +298,8 @@ public sealed class ArchiveService
 
     private static double Jitter() => 0.9 + Random.Shared.NextDouble() * 0.2;
 
-    private static bool IsSelected(string bvid, SyncState state, PluginConfiguration config) =>
-        config.FolderIds.Any(id => state.Folders.TryGetValue(id, out var folder) && folder.KnownBvids.Contains(bvid));
+    private static bool IsSelected(string bvid, SyncState state, IEnumerable<long> folderIds) =>
+        folderIds.Any(id => state.Folders.TryGetValue(id, out var folder) && folder.KnownBvids.Contains(bvid));
 
     private async Task ArchivePageAsync(VideoInfo video, VideoPage page, PluginConfiguration config, CancellationToken ct)
     {
@@ -326,8 +329,9 @@ public sealed class ArchiveService
         {
             var streams = await _api.GetPlayStreamsAsync(video.Bvid, page.Cid, config.Quality, ct).ConfigureAwait(false);
             await _api.DownloadAsync(streams.Video.Url, videoPart, video.Bvid, ct).ConfigureAwait(false);
-            await _api.DownloadAsync(streams.Audio.Url, audioPart, video.Bvid, ct).ConfigureAwait(false);
-            await MuxAsync(FindFfmpeg(config.FfmpegPath), videoPart, audioPart, outputPart, ct).ConfigureAwait(false);
+            if (streams.Audio is not null)
+                await _api.DownloadAsync(streams.Audio.Url, audioPart, video.Bvid, ct).ConfigureAwait(false);
+            await MuxAsync(FindFfmpeg(config.FfmpegPath), videoPart, streams.Audio is null ? null : audioPart, outputPart, ct).ConfigureAwait(false);
             if (!File.Exists(outputPart) || new FileInfo(outputPart).Length == 0)
                 throw new IOException("FFmpeg 没有生成有效的输出文件。");
             File.Move(outputPart, final, true);
@@ -367,14 +371,18 @@ public sealed class ArchiveService
         }, ct).ConfigureAwait(false);
     }
 
-    private static async Task MuxAsync(string ffmpeg, string video, string audio, string output, CancellationToken ct)
+    private static async Task MuxAsync(string ffmpeg, string video, string? audio, string output, CancellationToken ct)
     {
         using var process = new Process { StartInfo = new ProcessStartInfo(ffmpeg)
         {
             UseShellExecute = false, RedirectStandardError = true, CreateNoWindow = true
         } };
-        foreach (var arg in new[] { "-hide_banner", "-loglevel", "error", "-y", "-i", video, "-i", audio,
-                     "-map", "0:v:0", "-map", "1:a:0", "-c", "copy", "-movflags", "+faststart", output })
+        var args = new List<string> { "-hide_banner", "-loglevel", "error", "-y", "-i", video };
+        if (audio is not null) args.AddRange(["-i", audio]);
+        args.AddRange(["-map", "0:v:0"]);
+        if (audio is not null) args.AddRange(["-map", "1:a:0"]);
+        args.AddRange(["-c", "copy", "-movflags", "+faststart", output]);
+        foreach (var arg in args)
             process.StartInfo.ArgumentList.Add(arg);
         process.Start();
         try

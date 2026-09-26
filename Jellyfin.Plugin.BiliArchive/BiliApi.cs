@@ -15,7 +15,7 @@ public sealed record FavoriteIds(IReadOnlyList<string> Bvids, int ResourceCount)
 public sealed record VideoPage(long Cid, int Page, string Part);
 public sealed record VideoInfo(string Bvid, string Title, string Cover, IReadOnlyList<VideoPage> Pages);
 public sealed record DashStream(string Url, int Quality, long Bandwidth);
-public sealed record PlayStreams(DashStream Video, DashStream Audio);
+public sealed record PlayStreams(DashStream Video, DashStream? Audio);
 
 public sealed class BiliApi
 {
@@ -172,9 +172,17 @@ public sealed class BiliApi
         var query = string.Join("&", parameters.Select(kv => Uri.EscapeDataString(kv.Key) + "=" + Uri.EscapeDataString(kv.Value)));
         var signature = Convert.ToHexString(MD5.HashData(Encoding.UTF8.GetBytes(query + mixin))).ToLowerInvariant();
         using var json = await GetJsonAsync("https://api.bilibili.com/x/player/wbi/playurl?" + query + "&w_rid=" + signature, true, ct).ConfigureAwait(false);
-        var dash = GetData(json.RootElement).GetProperty("dash");
+        return ParsePlayStreams(GetData(json.RootElement), maxQuality);
+    }
+
+    internal static PlayStreams ParsePlayStreams(JsonElement data, int maxQuality)
+    {
+        if (!data.TryGetProperty("dash", out var dash) || dash.ValueKind != JsonValueKind.Object)
+            throw new InvalidDataException("B 站没有返回可下载的 DASH 视频流。");
         var video = PickStream(dash.GetProperty("video"), maxQuality);
-        var audio = PickStream(dash.GetProperty("audio"), int.MaxValue);
+        var audio = dash.TryGetProperty("audio", out var audioStreams) && audioStreams.ValueKind == JsonValueKind.Array && audioStreams.GetArrayLength() > 0
+            ? PickStream(audioStreams, int.MaxValue)
+            : null;
         return new PlayStreams(video, audio);
     }
 

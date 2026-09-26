@@ -24,6 +24,18 @@ using (var videoJson = JsonDocument.Parse("""{"title":"大 CID 测试","pic":"",
     if (video.Pages.Count != 1 || video.Pages[0].Cid != largeCid)
         throw new Exception("超过 Int32 范围的 CID 解析失败。");
 }
+const long recentCid = 27_293_516_471L;
+using (var videoJson = JsonDocument.Parse("""{"title":"近期视频","pic":"","pages":[{"cid":27293516471,"page":1,"part":"正片"}]}"""))
+{
+    if (BiliApi.ParseVideoInfo("BV1qSqFYFErX", videoJson.RootElement).Pages[0].Cid != recentCid)
+        throw new Exception("近期视频的超大 CID 解析失败。");
+}
+using (var playJson = JsonDocument.Parse("""{"dash":{"video":[{"id":64,"baseUrl":"https://example.org/video.m4s","bandwidth":1000}],"audio":null}}"""))
+{
+    var streams = BiliApi.ParsePlayStreams(playJson.RootElement, 80);
+    if (streams.Video.Quality != 64 || streams.Audio is not null)
+        throw new Exception("无音轨 DASH 视频不应因 audio=null 失败。");
+}
 await second.SaveAsync(new ArchiveRecord
 {
     Bvid = "BV1xx411c7mE", Cid = largeCid, Title = "大 CID 测试", Status = "completed",
@@ -89,4 +101,16 @@ SyncPlanner.ApplyMembership(plannerFolder, plannerState, ["BV1xx411c7mD", b], ar
     new HashSet<string>(), baseTime.AddMinutes(5), 30, 240, 1);
 if (!plannerState.Pending[b].IsNewFavorite) throw new Exception("重新收藏应提高待下载项优先级。");
 
-Console.WriteLine("PASS: 大 CID 解析与持久化；BV/CID、增量游标与重试队列持久化；差异检测、退避、配置页、二维码。");
+var retryState = new SyncState();
+retryState.Folders[42] = new FolderSyncState { KnownBvids = ["BV1xx411c7mD", "BV1xx411c7mE"] };
+retryState.Pending["BV1xx411c7mD"] = new PendingVideo { Bvid = "BV1xx411c7mD", NextAttemptAt = baseTime.AddHours(1) };
+retryState.Pending["BV1xx411c7mE"] = new PendingVideo { Bvid = "BV1xx411c7mE", NextAttemptAt = baseTime.AddHours(2) };
+long[] selectedFolders = [42];
+if (ArchiveService.SelectPending(retryState, selectedFolders, baseTime, false).Length != 0 ||
+    ArchiveService.SelectPending(retryState, selectedFolders, baseTime, true)[0].Bvid != "BV1xx411c7mD")
+    throw new Exception("立即同步应允许重试等待中的视频。");
+retryState.Pending["BV1xx411c7mD"].NextAttemptAt = baseTime.AddHours(3);
+if (ArchiveService.SelectPending(retryState, selectedFolders, baseTime, true)[0].Bvid != "BV1xx411c7mE")
+    throw new Exception("重试后应优先处理其他等待项。");
+
+Console.WriteLine("PASS: 大 CID、无音轨 DASH、手动重试；BV/CID、增量游标与重试队列持久化；差异检测、退避、配置页、二维码。");

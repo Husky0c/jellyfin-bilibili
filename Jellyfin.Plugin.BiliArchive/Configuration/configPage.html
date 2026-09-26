@@ -1,19 +1,24 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><title>Bilibili 收藏归档</title></head>
+<head><meta charset="utf-8"><title>Bilibili 收藏归档</title>
+<style>
+  #BiliArchivePage .biliActionButton { background-color: #165a9b !important; color: #fff !important; }
+  #BiliArchivePage .biliActionButton:hover, #BiliArchivePage .biliActionButton:focus { background-color: #104775 !important; color: #fff !important; }
+</style></head>
 <body>
 <div id="BiliArchivePage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-select">
   <div data-role="content"><div class="content-primary">
     <h2>Bilibili 收藏归档</h2>
+    <p id="biliPluginVersion"></p>
     <p>视频下载成功后会永久保留；取消收藏不会删除本地文件。仅下载此账号有权访问的内容。</p>
     <h3>1. 登录 Bilibili</h3>
     <p id="biliLoginStatus">正在检查登录状态…</p>
     <button id="biliQrButton" is="emby-button" type="button" class="raised emby-button">扫码登录</button>
-    <button id="biliLogoutButton" is="emby-button" type="button" class="emby-button">退出登录</button>
+    <button id="biliLogoutButton" is="emby-button" type="button" class="raised emby-button biliActionButton">退出登录</button>
     <div><img id="biliQrImage" alt="Bilibili 登录二维码" style="display:none;width:240px;height:240px;background:white;margin:1em 0"></div>
     <p id="biliQrHint"></p>
     <h3>2. 选择收藏夹</h3>
-    <button id="biliFoldersButton" is="emby-button" type="button" class="emby-button">刷新收藏夹</button>
+    <button id="biliFoldersButton" is="emby-button" type="button" class="raised emby-button biliActionButton">刷新收藏夹</button>
     <div id="biliFolders"></div>
     <h3>3. 归档设置</h3>
     <form id="biliArchiveForm">
@@ -47,7 +52,7 @@
     <p id="biliRunHint"></p>
     <h3>归档状态</h3>
     <p id="biliSummary"></p>
-    <button id="biliRecordsButton" is="emby-button" type="button" class="emby-button">刷新记录</button>
+    <button id="biliRecordsButton" is="emby-button" type="button" class="raised emby-button biliActionButton">刷新记录</button>
     <div id="biliRecords"></div>
   </div></div>
   <script type="text/javascript">
@@ -69,6 +74,7 @@
       async function refreshStatus() {
         try {
           const state = await ApiClient.getJSON(endpoint('status'));
+          byId('biliPluginVersion').textContent = state.version ? '当前插件版本：' + state.version : '';
           byId('biliLoginStatus').textContent = state.loggedIn ? '已登录，UID：' + state.mid : '未登录或 Cookie 已过期';
           byId('biliSummary').textContent = '已归档 ' + state.completed + ' 项；待处理 ' + state.pending + ' 项；失败 ' + state.failed + ' 项；失效 ' + state.unavailable + ' 项' +
             (state.running ? '；正在同步' : '') + (state.pausedUntil ? '；风控冷却至 ' + new Date(state.pausedUntil).toLocaleString() : '') +
@@ -164,7 +170,9 @@
             const cid = record.Cid ?? record.cid;
             const title = record.Title ?? record.title;
             const error = record.Error ?? record.error;
-            row.textContent = status + ' · ' + bvid + ' / ' + cid + ' · ' + title + (error ? ' · ' + error : '');
+            const updatedAt = record.UpdatedAt ?? record.updatedAt;
+            row.textContent = status + ' · ' + bvid + ' / ' + cid + ' · ' + title +
+              (updatedAt ? ' · ' + new Date(updatedAt).toLocaleString() : '') + (error ? ' · ' + error : '');
             row.style.margin = '.35em 0';
             container.appendChild(row);
           }

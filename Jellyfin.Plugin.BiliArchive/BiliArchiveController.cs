@@ -58,6 +58,7 @@ public sealed class BiliArchiveController : ControllerBase
         var activePending = sync.Pending.Values.Count(x => selected.Any(id => sync.Folders.TryGetValue(id, out var folder) && folder.KnownBvids.Contains(x.Bvid)));
         return Ok(new
         {
+            version = typeof(BiliArchiveController).Assembly.GetName().Version?.ToString(),
             loggedIn = mid.HasValue,
             mid,
             running = _archive.IsRunning,
