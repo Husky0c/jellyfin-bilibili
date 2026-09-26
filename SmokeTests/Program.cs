@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Xml.Linq;
 using Jellyfin.Plugin.BiliArchive;
 using QRCoder;
 
@@ -18,11 +19,36 @@ var record = await second.GetAsync("BV1xx411c7mD", 123, CancellationToken.None);
 if (record?.Status != "completed" || record.FilePath is null)
     throw new Exception("BV/CID 完成状态未持久化。");
 const long largeCid = 3_000_000_123L;
-using (var videoJson = JsonDocument.Parse("""{"title":"大 CID 测试","pic":"","pages":[{"cid":3000000123,"page":1,"part":"正片"}]}"""))
+using (var videoJson = JsonDocument.Parse("""{"title":"大 CID 测试","pic":"","owner":{"mid":123456,"name":"测试 UP 主","face":"https://example.org/avatar?x=1&y=2"},"pages":[{"cid":3000000123,"page":1,"part":"正片"}]}"""))
 {
     var video = BiliApi.ParseVideoInfo("BV1xx411c7mD", videoJson.RootElement);
-    if (video.Pages.Count != 1 || video.Pages[0].Cid != largeCid)
-        throw new Exception("超过 Int32 范围的 CID 解析失败。");
+    if (video.Pages.Count != 1 || video.Pages[0].Cid != largeCid || video.Uploader?.Mid != 123456)
+        throw new Exception("超过 Int32 范围的 CID 或 UP 主解析失败。");
+
+    var nfoFolder = Path.Combine(folder, "nfo");
+    Directory.CreateDirectory(nfoFolder);
+    var videoPath = Path.Combine(nfoFolder, "video.mp4");
+    var oldNfo = Path.Combine(nfoFolder, "movie.nfo");
+    new XDocument(new XElement("movie",
+        new XElement("title", video.Title),
+        new XElement("plot", $"Bilibili {video.Bvid} / CID {largeCid}"),
+        new XElement("uniqueid", new XAttribute("type", "bilibili"), new XAttribute("default", "true"), $"{video.Bvid}:{largeCid}"))).Save(oldNfo);
+    ArchiveService.WriteNfo(video, video.Pages[0], videoPath);
+    var nfoPath = Path.ChangeExtension(videoPath, ".nfo");
+    var nfo = XDocument.Load(nfoPath);
+    var actor = nfo.Root?.Element("actor");
+    if (File.Exists(oldNfo) || (string?)nfo.Root?.Element("title") != video.Title ||
+        (string?)actor?.Element("name") != "测试 UP 主" ||
+        (string?)actor?.Element("role") != "UP主" ||
+        (string?)actor?.Element("thumb") != "https://example.org/avatar?x=1&y=2" ||
+        !((string?)nfo.Root?.Element("plot") ?? string.Empty).Contains("https://space.bilibili.com/123456", StringComparison.Ordinal))
+        throw new Exception("同名 NFO、UP 主演员信息或旧版 NFO 迁移失败。");
+    nfo.Root!.Add(new XElement("genre", "用户自定义"));
+    nfo.Save(nfoPath);
+    ArchiveService.WriteNfo(video, video.Pages[0], videoPath);
+    nfo = XDocument.Load(nfoPath);
+    if (nfo.Root?.Elements("actor").Count() != 1 || (string?)nfo.Root?.Element("genre") != "用户自定义")
+        throw new Exception("再次同步不应重复演员或覆盖用户 NFO 字段。");
 }
 const long recentCid = 27_293_516_471L;
 using (var videoJson = JsonDocument.Parse("""{"title":"近期视频","pic":"","pages":[{"cid":27293516471,"page":1,"part":"正片"}]}"""))
@@ -113,4 +139,4 @@ retryState.Pending["BV1xx411c7mD"].NextAttemptAt = baseTime.AddHours(3);
 if (ArchiveService.SelectPending(retryState, selectedFolders, baseTime, true)[0].Bvid != "BV1xx411c7mE")
     throw new Exception("重试后应优先处理其他等待项。");
 
-Console.WriteLine("PASS: 大 CID、无音轨 DASH、手动重试；BV/CID、增量游标与重试队列持久化；差异检测、退避、配置页、二维码。");
+Console.WriteLine("PASS: 大 CID、UP 主同名 NFO 与旧版迁移、无音轨 DASH、手动重试；BV/CID、增量游标与重试队列持久化；差异检测、退避、配置页、二维码。");

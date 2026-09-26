@@ -308,13 +308,12 @@ public sealed class ArchiveService
         var final = Path.Combine(folder, "video.mp4");
         if (prior is { Status: "completed", FilePath: not null } && File.Exists(prior.FilePath))
         {
-            var priorFolder = Path.GetDirectoryName(prior.FilePath)!;
-            if (!File.Exists(Path.Combine(priorFolder, "movie.nfo"))) WriteNfo(video, page, priorFolder);
+            WriteNfo(video, page, prior.FilePath);
             return;
         }
         if (File.Exists(final) && new FileInfo(final).Length > 0)
         {
-            WriteNfo(video, page, folder);
+            WriteNfo(video, page, final);
             await _store.SaveAsync(new ArchiveRecord { Bvid = video.Bvid, Cid = page.Cid, Title = video.Title, Status = "completed", FilePath = final }, ct).ConfigureAwait(false);
             return;
         }
@@ -335,7 +334,7 @@ public sealed class ArchiveService
             if (!File.Exists(outputPart) || new FileInfo(outputPart).Length == 0)
                 throw new IOException("FFmpeg 没有生成有效的输出文件。");
             File.Move(outputPart, final, true);
-            WriteNfo(video, page, folder);
+            WriteNfo(video, page, final);
             record.Status = "completed";
             record.FilePath = final;
             record.Error = null;
@@ -406,14 +405,64 @@ public sealed class ArchiveService
         return File.Exists(jellyfin) ? jellyfin : "ffmpeg";
     }
 
-    private static void WriteNfo(VideoInfo video, VideoPage page, string folder)
+    internal static void WriteNfo(VideoInfo video, VideoPage page, string videoPath)
     {
+        var nfoPath = Path.ChangeExtension(videoPath, ".nfo");
+        var legacyPath = Path.Combine(Path.GetDirectoryName(videoPath)!, "movie.nfo");
         var title = video.Pages.Count == 1 ? video.Title : $"{video.Title} - P{page.Page:D2} {page.Part}";
-        var nfo = new XDocument(new XElement("movie",
+        var id = video.Bvid + ":" + page.Cid;
+        var plot = $"Bilibili {video.Bvid} / CID {page.Cid}";
+        if (video.Uploader is { Mid: > 0 } creator)
+            plot += $"\nUP主：{creator.Name}\nUP主页：https://space.bilibili.com/{creator.Mid}";
+        var nfo = File.Exists(nfoPath) ? XDocument.Load(nfoPath) : new XDocument(new XElement("movie",
             new XElement("title", title),
-            new XElement("plot", $"Bilibili {video.Bvid} / CID {page.Cid}"),
-            new XElement("uniqueid", new XAttribute("type", "bilibili"), new XAttribute("default", "true"), video.Bvid + ":" + page.Cid)));
-        nfo.Save(Path.Combine(folder, "movie.nfo"));
+            new XElement("plot", plot),
+            new XElement("uniqueid", new XAttribute("type", "bilibili"), new XAttribute("default", "true"), id)));
+        var root = nfo.Root ?? throw new InvalidDataException($"NFO 没有根元素：{nfoPath}");
+        var changed = !File.Exists(nfoPath);
+        if (video.Uploader is { Name: var name } uploader && !string.IsNullOrWhiteSpace(name))
+        {
+            var actor = root.Elements("actor").FirstOrDefault(x =>
+                string.Equals((string?)x.Element("name"), name, StringComparison.Ordinal) &&
+                string.Equals((string?)x.Element("role"), "UP主", StringComparison.Ordinal));
+            if (actor is null)
+            {
+                actor = new XElement("actor", new XElement("name", name), new XElement("role", "UP主"),
+                    new XElement("type", "Actor"));
+                root.Add(actor);
+                changed = true;
+            }
+            if (!string.IsNullOrWhiteSpace(uploader.Face) &&
+                !string.Equals((string?)actor.Element("thumb"), uploader.Face, StringComparison.Ordinal))
+            {
+                actor.SetElementValue("thumb", uploader.Face);
+                changed = true;
+            }
+        }
+        if (changed) nfo.Save(nfoPath);
+
+        // Remove only the exact three-field sidecar emitted by older plugin versions.
+        // A user-edited movie.nfo is kept intact.
+        if (legacyPath != nfoPath && File.Exists(legacyPath) && IsLegacyPluginNfo(legacyPath, video.Bvid, page.Cid))
+            File.Delete(legacyPath);
+    }
+
+    private static bool IsLegacyPluginNfo(string path, string bvid, long cid)
+    {
+        XElement? root;
+        try { root = XDocument.Load(path).Root; }
+        catch (System.Xml.XmlException) { return false; }
+        if (root?.Name != "movie" || root.HasAttributes) return false;
+        var elements = root.Elements().ToArray();
+        return elements.Length == 3 &&
+            elements[0].Name == "title" && !elements[0].HasAttributes &&
+            elements[1].Name == "plot" && !elements[1].HasAttributes &&
+            elements[2].Name == "uniqueid" &&
+            (string?)elements[2].Attribute("type") == "bilibili" &&
+            (string?)elements[2].Attribute("default") == "true" &&
+            elements[2].Value == bvid + ":" + cid &&
+            elements[2].Attributes().Count() == 2 &&
+            elements[1].Value == $"Bilibili {bvid} / CID {cid}";
     }
 
     private static void ValidateConfiguration(PluginConfiguration config)

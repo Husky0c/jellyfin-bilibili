@@ -13,7 +13,8 @@ public sealed record FavoriteVideo(string Bvid, string Title, bool Available, in
 public sealed record FavoritePage(IReadOnlyList<FavoriteVideo> Items, bool HasMore);
 public sealed record FavoriteIds(IReadOnlyList<string> Bvids, int ResourceCount);
 public sealed record VideoPage(long Cid, int Page, string Part);
-public sealed record VideoInfo(string Bvid, string Title, string Cover, IReadOnlyList<VideoPage> Pages);
+public sealed record VideoUploader(long Mid, string Name, string Face);
+public sealed record VideoInfo(string Bvid, string Title, string Cover, IReadOnlyList<VideoPage> Pages, VideoUploader? Uploader);
 public sealed record DashStream(string Url, int Quality, long Bandwidth);
 public sealed record PlayStreams(DashStream Video, DashStream? Audio);
 
@@ -149,7 +150,18 @@ public sealed class BiliApi
         var pages = data.GetProperty("pages").EnumerateArray()
             .Select(x => new VideoPage(x.GetProperty("cid").GetInt64(), x.GetProperty("page").GetInt32(), x.GetProperty("part").GetString() ?? string.Empty))
             .ToArray();
-        return new VideoInfo(bvid, data.GetProperty("title").GetString() ?? bvid, data.GetProperty("pic").GetString() ?? string.Empty, pages);
+        VideoUploader? uploader = null;
+        if (data.TryGetProperty("owner", out var owner) && owner.ValueKind == JsonValueKind.Object)
+        {
+            var name = owner.TryGetProperty("name", out var ownerName) ? ownerName.GetString() : null;
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                var mid = owner.TryGetProperty("mid", out var ownerMid) && ownerMid.TryGetInt64(out var parsedMid) ? parsedMid : 0;
+                var face = owner.TryGetProperty("face", out var ownerFace) ? ownerFace.GetString() ?? string.Empty : string.Empty;
+                uploader = new VideoUploader(mid, name, face);
+            }
+        }
+        return new VideoInfo(bvid, data.GetProperty("title").GetString() ?? bvid, data.GetProperty("pic").GetString() ?? string.Empty, pages, uploader);
     }
 
     public async Task<PlayStreams> GetPlayStreamsAsync(string bvid, long cid, int maxQuality, CancellationToken ct)
