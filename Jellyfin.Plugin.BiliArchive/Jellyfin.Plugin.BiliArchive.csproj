@@ -1,22 +1,32 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <JellyfinAbi Condition="'$(JellyfinAbi)' == ''">10.10</JellyfinAbi>
+    <TargetFramework Condition="'$(JellyfinAbi)' == '10.10'">net8.0</TargetFramework>
+    <TargetFramework Condition="'$(JellyfinAbi)' == '10.11'">net9.0</TargetFramework>
+    <TargetFramework Condition="'$(JellyfinAbi)' == '12'">net10.0</TargetFramework>
+    <JellyfinPackageVersion Condition="'$(JellyfinAbi)' == '10.10'">10.10.7</JellyfinPackageVersion>
+    <JellyfinPackageVersion Condition="'$(JellyfinAbi)' == '10.11'">10.11.0</JellyfinPackageVersion>
+    <JellyfinPackageVersion Condition="'$(JellyfinAbi)' == '12'">12.0.0</JellyfinPackageVersion>
+    <DefineConstants Condition="'$(JellyfinAbi)' != '10.10'">$(DefineConstants);JELLYFIN_10_11_OR_LATER</DefineConstants>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <NoWarn>$(NoWarn);1591</NoWarn>
     <AssemblyName>Jellyfin.Plugin.BiliArchive</AssemblyName>
-    <Version>1.1.0.3</Version>
+    <Version>1.2.0.0</Version>
   </PropertyGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
-    <PackageReference Include="Jellyfin.Controller" Version="10.10.7" ExcludeAssets="runtime" />
-    <PackageReference Include="Jellyfin.Model" Version="10.10.7" ExcludeAssets="runtime" />
+    <PackageReference Include="Jellyfin.Controller" Version="$(JellyfinPackageVersion)" ExcludeAssets="runtime" />
+    <PackageReference Include="Jellyfin.Model" Version="$(JellyfinPackageVersion)" ExcludeAssets="runtime" />
     <PackageReference Include="QRCoder" Version="1.7.0" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Configuration\configPage.html" />
     <InternalsVisibleTo Include="SmokeTests" />
   </ItemGroup>
+  <Target Name="ValidateJellyfinAbi" BeforeTargets="Restore;Build;Publish" Condition="'$(JellyfinPackageVersion)' == ''">
+    <Error Text="Unsupported JellyfinAbi '$(JellyfinAbi)'. Use 10.10, 10.11, or 12." />
+  </Target>
 </Project>

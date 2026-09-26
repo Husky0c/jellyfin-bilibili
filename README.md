@@ -1,6 +1,6 @@
 # Jellyfin Bilibili 收藏归档
 
-面向 Jellyfin 10.10.7（.NET 8）的原生插件。使用 Bilibili App 扫码登录，选择自己的收藏夹，轻量检测新增收藏并自动下载。视频以 BV 号、CID 去重；成功归档后即使取消收藏也不会删除本地文件。未下载且已下架的视频无法保证补回。
+面向 Jellyfin 10.10.7（.NET 8）、10.11.x（.NET 9）和 12.x（.NET 10）分别构建的原生插件。使用 Bilibili App 扫码登录，选择自己的收藏夹，轻量检测新增收藏并自动下载。视频以 BV 号、CID 去重；成功归档后即使取消收藏也不会删除本地文件。未下载且已下架的视频无法保证补回。
 
 ## 当前功能
 
@@ -14,29 +14,42 @@
 
 ## 构建
 
-安装 .NET 8 SDK，然后执行：
+按目标版本安装 .NET 8、9 或 10 SDK。以 Jellyfin 10.10 为例：
 
 ```powershell
-dotnet restore Jellyfin.Plugin.BiliArchive/Jellyfin.Plugin.BiliArchive.csproj --configfile NuGet.Config
-dotnet publish Jellyfin.Plugin.BiliArchive/Jellyfin.Plugin.BiliArchive.csproj -c Release --no-restore -o dist/BiliArchive_1.1.0.3
+dotnet restore SmokeTests/SmokeTests.csproj --configfile NuGet.Config -p:JellyfinAbi=10.10
+dotnet run --project SmokeTests/SmokeTests.csproj -c Release --no-restore -p:JellyfinAbi=10.10
+pwsh ./scripts/package-release.ps1 -JellyfinAbi 10.10 -NoRestore
 ```
 
-将根目录的 `meta.json` 复制到上述输出目录。安装时使用插件 DLL、同名 `.deps.json`、`QRCoder.dll`、`System.Drawing.Common.dll`、`Microsoft.Win32.SystemEvents.dll` 和 `meta.json` 这六个文件；不要把 `runtimes` 目录或 Jellyfin 自身依赖一起放进插件目录。NuGet 依赖固定为 Jellyfin 10.10.7 和 QRCoder 1.7.0。插件不能直接用于 Jellyfin 10.11/12。
+其他版本将 `JellyfinAbi` 改为 `10.11` 或 `12`。每个目标都要分别还原、测试、打包；生成的 ZIP 和 SHA-256 校验文件位于 `dist/packages/`。不要把 `runtimes` 目录或 Jellyfin 自身依赖一起放进插件目录。QRCoder 固定为 1.7.0；每个目标使用对应 Jellyfin ABI 起始版本的 NuGet 包。
+
+| Jellyfin 服务端 | ZIP 后缀 | 目标框架 |
+| --- | --- | --- |
+| 10.10.7 | `Jellyfin-10.10-anycpu` | .NET 8 |
+| 10.11.x | `Jellyfin-10.11-anycpu` | .NET 9 |
+| 12.x | `Jellyfin-12-anycpu` | .NET 10 |
+
+同一 Jellyfin 版本的 ZIP 是无 RID 的托管程序集，x64 和 ARM64 的 Jellyfin 宿主共用，不需要为 CPU 分别下载。FFmpeg 是容器/系统内的外部程序，必须与宿主架构匹配，且可从配置路径、`/usr/lib/jellyfin-ffmpeg/ffmpeg` 或 `PATH` 找到。Jellyfin 10.11 起已移除 ARM32；官方 Linux 32 位 x86 宿主不受支持，因此不能承诺这些环境可用。跨架构构建与冒烟测试不等于真实服务器端到端测试；请先在测试收藏夹验证插件加载、扫码及 FFmpeg 封装。
+
+GitHub Actions 会在推送 `main` 时运行三个目标的构建和冒烟测试。推送与 `meta.json` 版本一致的 `v*` 标签后，三个目标全部通过才创建带 ZIP 和 SHA-256 文件的 [GitHub Release](https://github.com/Husky0c/jellyfin-bilibili/releases)。
 
 ## 部署到 Jellyfin Docker（飞牛 NAS 示例）
 
 1. 在 NAS 上准备一个独立目录，并将其以读写方式挂载进 Jellyfin 容器，例如映射为 `/media/bilibili`。确认容器用户有写入权限；不要直接把整个已有媒体库当归档目录。FFmpeg 路径因镜像而异，可在插件页面手动指定。
-2. 找到 Jellyfin 容器的 `/config` 对应的 NAS 目录。将上面列出的六个构建产物放到其 `plugins/BiliArchive_1.1.0.3/` 子目录；若使用另行提供的 ZIP 包，解压后也应是同样的六个文件。不要多套一层目录。
+2. 找到 Jellyfin 容器的 `/config` 对应的 NAS 目录。下载与服务端版本匹配的 ZIP，将包内六个运行文件及 `LICENSE` 解压到其 `plugins/BiliArchive_1.2.0.0/` 子目录；不要多套一层目录。升级时先备份并移走旧版本插件目录，不要清理归档视频或插件数据目录。
 3. 重启 Jellyfin 容器，确认插件页面出现“Bilibili 收藏归档”。若服务不能启动，移走刚才添加的插件文件夹并重启。
 4. 在插件页面扫码登录，刷新并勾选收藏夹，设置容器内归档目录和检查间隔后保存。
 5. 点击插件页面“立即同步”，确认生成 MP4 与 NFO；然后在 Jellyfin 添加电影媒体库指向同一容器内目录。手动运行 Jellyfin 计划任务只执行到期检查；“立即同步”会忽略普通到期时间，但不会绕过风控冷却。
 
 不建议在未确认 Docker 挂载与插件启动日志前直接对生产媒体目录进行首次同步。先用独立测试目录、小收藏夹验证。
 
-若曾安装 `1.1.0.0` 且状态为 `Malfunctioned`，请先备份旧插件目录，不要清理归档视频或插件数据目录；将新版解压到单独的 `BiliArchive_1.1.0.3` 目录后重启。旧包包含多个平台同名运行库，Jellyfin 可能在启动时重复加载 DLL。若新版仍失败，请查看 Jellyfin 启动日志中 `BiliArchive` 附近的第一条异常。
+若曾安装 `1.1.0.0` 且状态为 `Malfunctioned`，请先备份旧插件目录；旧包包含多个平台同名运行库，Jellyfin 可能在启动时重复加载 DLL。若新版仍失败，请查看 Jellyfin 启动日志中 `BiliArchive` 附近的第一条异常。
 
 ## 存档行为与限制
 
 目录结构为 `归档目录/BV号/P序号-CID/video.mp4`，旁边有 `movie.nfo`。收藏夹移除、取消选择收藏夹和退出登录都不会清理归档。若状态显示完成而文件丢失，下次遇到该收藏视频时会重新下载。B 站风控、Cookie 过期、会员或地域限制、API 变更、已删除视频都可能导致失败；失败状态会记录供查看。服务器必须能直接访问 B 站 API 和 CDN。
 
 本项目不提供版权或访问控制绕过；请仅归档你有权访问和保存的内容。
+
+项目以 [GNU GPL-3.0](LICENSE) 授权。

@@ -21,7 +21,15 @@ public sealed class ArchiveTask : IScheduledTask
 
     public IEnumerable<TaskTriggerInfo> GetDefaultTriggers() =>
     [
-        new TaskTriggerInfo { Type = "IntervalTrigger", IntervalTicks = TimeSpan.FromMinutes(15).Ticks }
+        new TaskTriggerInfo
+        {
+#if JELLYFIN_10_11_OR_LATER
+            Type = TaskTriggerInfoType.IntervalTrigger,
+#else
+            Type = "IntervalTrigger",
+#endif
+            IntervalTicks = TimeSpan.FromMinutes(15).Ticks
+        }
     ];
 
     public async Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
