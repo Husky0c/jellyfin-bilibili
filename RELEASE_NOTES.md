@@ -1,6 +1,6 @@
-1.2.2.0 将归档 NFO 命名为与视频同名的 `video.nfo`，并把 B 站 UP 主写为演员：姓名、`UP主` 身份和头像；简介附 UP 主页。再次处理旧归档时会补充同名 NFO，并清理内容完全符合旧版插件输出格式的 `movie.nfo`，保留手动编辑过的旧文件。升级本身不会重新处理全部已完成视频；请在 Jellyfin 扫描或刷新媒体库以读取新 NFO。
+1.2.3.0 新增 Jellyfin 插件仓库清单。管理员可在插件页面添加 `https://raw.githubusercontent.com/Husky0c/jellyfin-bilibili/main/manifest.json`，从目录安装与服务端 ABI 匹配的插件；此版本起启用 Jellyfin 的自动更新。后续发布完成后，流水线会将新版本及校验值写入仓库清单。
 
-普通视频媒体库可以读取演员信息，视频详情会显示演员；Jellyfin Web 的人物详情页目前可能不列出其关联的普通视频。头像显示还取决于 Jellyfin 能否访问 B 站头像地址。
+已有手动安装的旧版请先备份并移走旧插件目录，再通过目录安装，避免相同 GUID 的两个版本并存。添加仓库链接只会显示目录项；首次安装仍需管理员点击安装并重启 Jellyfin。自动更新取决于 Jellyfin 的插件更新计划任务和可用的新版本。
 
 Jellyfin 10.10.7、10.11.x 和 12.x 分别提供安装包。请选择与 **Jellyfin 服务端版本**匹配的 ZIP；同一 ZIP 内的插件 DLL 为 AnyCPU 托管代码，供相应 Jellyfin/.NET 宿主上的 x64 或 ARM64 共用，不包含 FFmpeg 或平台运行库。
 

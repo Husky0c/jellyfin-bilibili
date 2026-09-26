@@ -32,12 +32,22 @@ pwsh ./scripts/package-release.ps1 -JellyfinAbi 10.10 -NoRestore
 
 同一 Jellyfin 版本的 ZIP 是无 RID 的托管程序集，x64 和 ARM64 的 Jellyfin 宿主共用，不需要为 CPU 分别下载。FFmpeg 是容器/系统内的外部程序，必须与宿主架构匹配，且可从配置路径、`/usr/lib/jellyfin-ffmpeg/ffmpeg` 或 `PATH` 找到。Jellyfin 10.11 起已移除 ARM32；官方 Linux 32 位 x86 宿主不受支持，因此不能承诺这些环境可用。跨架构构建与冒烟测试不等于真实服务器端到端测试；请先在测试收藏夹验证插件加载、扫码及 FFmpeg 封装。
 
-GitHub Actions 会在推送 `main` 时运行三个目标的构建和冒烟测试。推送与 `meta.json` 版本一致的 `v*` 标签后，三个目标全部通过才创建带 ZIP 和 SHA-256 文件的 [GitHub Release](https://github.com/Husky0c/jellyfin-bilibili/releases)。
+GitHub Actions 会在推送 `main` 时运行三个目标的构建和冒烟测试。推送与 `meta.json` 版本一致的 `v*` 标签后，三个目标全部通过才创建带 ZIP 和 SHA-256 文件的 [GitHub Release](https://github.com/Husky0c/jellyfin-bilibili/releases)，随后更新 `manifest.json`。Jellyfin 插件仓库清单另外记录 ZIP 的 MD5，这是 Jellyfin 安装器使用的校验格式。
+
+## 从 Jellyfin 插件仓库安装
+
+在 **控制台 → 插件 → 存储库** 中新增一个存储库，名称可填 `Bilibili 收藏归档`，URL 填：
+
+```text
+https://raw.githubusercontent.com/Husky0c/jellyfin-bilibili/main/manifest.json
+```
+
+保存后到 **插件 → 目录** 中找到 **Bilibili 收藏归档**，点击安装，再重启 Jellyfin。仅添加存储库不会自动安装插件；安装后 Jellyfin 会通过自己的插件更新任务获取后续兼容版本。如果先前手动安装了旧版，请先备份并移走旧插件目录，再用目录安装，避免相同插件同时存在两份。Jellyfin 容器仍需能够访问 GitHub 下载发布包。
 
 ## 部署到 Jellyfin Docker（飞牛 NAS 示例）
 
 1. 在 NAS 上准备一个独立目录，并将其以读写方式挂载进 Jellyfin 容器，例如映射为 `/media/bilibili`。确认容器用户有写入权限；不要直接把整个已有媒体库当归档目录。FFmpeg 路径因镜像而异，可在插件页面手动指定。
-2. 找到 Jellyfin 容器的 `/config` 对应的 NAS 目录。下载与服务端版本匹配的 ZIP，将包内六个运行文件及 `LICENSE` 解压到其 `plugins/BiliArchive_1.2.2.0/` 子目录；不要多套一层目录。升级时先备份并移走旧版本插件目录，不要清理归档视频或插件数据目录。
+2. 找到 Jellyfin 容器的 `/config` 对应的 NAS 目录。下载与服务端版本匹配的 ZIP，将包内六个运行文件及 `LICENSE` 解压到其 `plugins/BiliArchive_1.2.3.0/` 子目录；不要多套一层目录。升级时先备份并移走旧版本插件目录，不要清理归档视频或插件数据目录。
 3. 重启 Jellyfin 容器，确认插件页面出现“Bilibili 收藏归档”。若服务不能启动，移走刚才添加的插件文件夹并重启。
 4. 在插件页面扫码登录，刷新并勾选收藏夹，设置容器内归档目录和检查间隔后保存。
 5. 点击插件页面“立即同步”，确认生成 MP4 与 NFO；然后在 Jellyfin 添加电影或普通视频媒体库指向同一容器内目录，并扫描媒体库。手动运行 Jellyfin 计划任务只执行到期检查；“立即同步”会复查收藏夹并重试待处理视频，但不会绕过风控冷却。一次最多处理 10 个视频，可重复点击继续处理。

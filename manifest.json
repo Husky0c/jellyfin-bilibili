@@ -1,0 +1,36 @@
+[
+  {
+    "versions": [
+      {
+        "version": "1.2.2.0",
+        "changelog": "1.2.2.0 将归档 NFO 命名为与视频同名的 `video.nfo`，并把 B 站 UP 主写为演员：姓名、`UP主` 身份和头像；简介附 UP 主页。再次处理旧归档时会补充同名 NFO，并清理内容完全符合旧版插件输出格式的 `movie.nfo`，保留手动编辑过的旧文件。升级本身不会重新处理全部已完成视频；请在 Jellyfin 扫描或刷新媒体库以读取新 NFO。",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/Husky0c/jellyfin-bilibili/releases/download/v1.2.2.0/BiliArchive_1.2.2.0_Jellyfin-12-anycpu.zip",
+        "checksum": "3204a56e9256c693f5ab6f9de21c0f1e",
+        "timestamp": "2026-09-26T15:49:59Z"
+      },
+      {
+        "version": "1.2.2.0",
+        "changelog": "1.2.2.0 将归档 NFO 命名为与视频同名的 `video.nfo`，并把 B 站 UP 主写为演员：姓名、`UP主` 身份和头像；简介附 UP 主页。再次处理旧归档时会补充同名 NFO，并清理内容完全符合旧版插件输出格式的 `movie.nfo`，保留手动编辑过的旧文件。升级本身不会重新处理全部已完成视频；请在 Jellyfin 扫描或刷新媒体库以读取新 NFO。",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/Husky0c/jellyfin-bilibili/releases/download/v1.2.2.0/BiliArchive_1.2.2.0_Jellyfin-10.11-anycpu.zip",
+        "checksum": "8f248379c8e97d175b07034f6ccc9e11",
+        "timestamp": "2026-09-26T15:49:59Z"
+      },
+      {
+        "version": "1.2.2.0",
+        "changelog": "1.2.2.0 将归档 NFO 命名为与视频同名的 `video.nfo`，并把 B 站 UP 主写为演员：姓名、`UP主` 身份和头像；简介附 UP 主页。再次处理旧归档时会补充同名 NFO，并清理内容完全符合旧版插件输出格式的 `movie.nfo`，保留手动编辑过的旧文件。升级本身不会重新处理全部已完成视频；请在 Jellyfin 扫描或刷新媒体库以读取新 NFO。",
+        "targetAbi": "10.10.7.0",
+        "sourceUrl": "https://github.com/Husky0c/jellyfin-bilibili/releases/download/v1.2.2.0/BiliArchive_1.2.2.0_Jellyfin-10.10-anycpu.zip",
+        "checksum": "290d6918b64f8b7529f65cb5ddf02035",
+        "timestamp": "2026-09-26T15:49:59Z"
+      }
+    ],
+    "category": "General",
+    "guid": "69080230-518d-47b1-b8a0-70854398506e",
+    "name": "Bilibili 收藏归档",
+    "description": "自动将 Bilibili 账号收藏夹中的视频下载到本地，取消收藏后仍保留，按 BV/CID 去重。",
+    "owner": "HUSKY0C",
+    "overview": "自动归档 Bilibili 收藏夹视频"
+  }
+]
