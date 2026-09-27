@@ -70,8 +70,10 @@ new XDocument(new XElement("movie", new XElement("title", "归档标题 - P01 �
 await layoutStore.SaveAsync(new ArchiveRecord { Bvid = bvid, Cid = 101, Title = "归档标题",
     Status = "completed", FilePath = oldPage1 }, CancellationToken.None);
 await layoutService.MigrateExistingArchivesAsync(layoutRoot, CancellationToken.None);
-var single = ArchiveService.MoviePath(layoutRoot, bvid, 1, 101, false);
+var single = ArchiveService.MoviePath(layoutRoot, bvid, "归档标题", 1, 101, false);
 if (!File.Exists(single) || File.Exists(oldPage1) ||
+    Path.GetFileName(Path.GetDirectoryName(single)) != $"归档标题 [{bvid}]" ||
+    Path.GetFileNameWithoutExtension(single) != Path.GetFileName(Path.GetDirectoryName(single)) ||
     (await layoutStore.GetAsync(bvid, 101, CancellationToken.None))?.FilePath != single ||
     (string?)XDocument.Load(Path.ChangeExtension(single, ".nfo")).Root?.Element("title") != "归档标题" ||
     (string?)XDocument.Load(Path.ChangeExtension(single, ".nfo")).Root?.Element("genre") != "自定义分类")
@@ -85,12 +87,15 @@ var multiVideo = new VideoInfo(bvid, "归档标题", "https://example.org/cover.
     [new VideoPage(101, 1, "开篇", "https://example.org/p1.jpg"),
      new VideoPage(102, 2, "后续", "https://example.org/p2.jpg")], null, "视频的整体简介");
 await layoutService.MigrateVideoArchivesAsync(multiVideo, layoutRoot, CancellationToken.None);
-var part1 = ArchiveService.MoviePath(layoutRoot, bvid, 1, 101, true);
-var part2 = ArchiveService.MoviePath(layoutRoot, bvid, 2, 102, true);
+var part1 = ArchiveService.MoviePath(layoutRoot, bvid, "归档标题", 1, 101, true, "开篇");
+var part2 = ArchiveService.MoviePath(layoutRoot, bvid, "归档标题", 2, 102, true, "后续");
 ArchiveService.WriteNfo(multiVideo, multiVideo.Pages[0], part1);
 ArchiveService.WriteNfo(multiVideo, multiVideo.Pages[1], part2);
-var collection = XDocument.Load(Path.Combine(layoutRoot, bvid + " [boxset]", "collection.xml"));
+var collectionFolder = Path.Combine(layoutRoot, $"归档标题 [{bvid}] [boxset]");
+var collection = XDocument.Load(Path.Combine(collectionFolder, "collection.xml"));
 if (File.Exists(single) || !File.Exists(part1) || !File.Exists(part2) || File.Exists(oldPage2) ||
+    Directory.Exists(Path.Combine(layoutRoot, bvid)) ||
+    Path.GetFileName(Path.GetDirectoryName(part1)) != "P01 - 开篇 (CID 101)" ||
     (await layoutStore.GetAsync(bvid, 101, CancellationToken.None))?.FilePath != part1 ||
     (await layoutStore.GetAsync(bvid, 102, CancellationToken.None))?.FilePath != part2 ||
     (string?)collection.Root?.Element("LocalTitle") != "归档标题" ||
@@ -115,7 +120,7 @@ for (var number = 1; number <= 2; number++)
         Title = "旧版多 P", Status = "completed", FilePath = previousPath }, CancellationToken.None);
 }
 await layoutService.MigrateExistingArchivesAsync(layoutRoot, CancellationToken.None);
-var migratedPart = ArchiveService.MoviePath(layoutRoot, previousBvid, 2, 202, true);
+var migratedPart = ArchiveService.MoviePath(layoutRoot, previousBvid, "旧版多 P", 2, 202, true);
 var migratedNfo = XDocument.Load(Path.ChangeExtension(migratedPart, ".nfo"));
 if (!File.Exists(migratedPart) || (string?)migratedNfo.Root?.Element("title") != "P02" ||
     (string?)migratedNfo.Root?.Element("genre") != "保留的分类" ||
@@ -130,8 +135,51 @@ if (!backfillState.Pending.ContainsKey(previousBvid))
 var notDownloaded = new VideoInfo("BV1xx411c7mH", "下载尚未成功", string.Empty,
     [new VideoPage(301, 1, "一"), new VideoPage(302, 2, "二")], null);
 await layoutService.MigrateVideoArchivesAsync(notDownloaded, layoutRoot, CancellationToken.None);
-if (Directory.Exists(Path.Combine(layoutRoot, notDownloaded.Bvid + " [boxset]")))
+if (Directory.Exists(Path.Combine(layoutRoot, $"下载尚未成功 [{notDownloaded.Bvid}] [boxset]")))
     throw new Exception("下载失败前不应出现空电影合集。");
+var oldBoxBvid = "BV1xx411c7mJ";
+var oldBoxFolder = Path.Combine(layoutRoot, oldBoxBvid + " [boxset]");
+var oldBoxMovie = Path.Combine(oldBoxFolder, "P01-401", "P01-401.mp4");
+Directory.CreateDirectory(Path.GetDirectoryName(oldBoxMovie)!);
+File.WriteAllBytes(oldBoxMovie, [7, 8, 9]);
+new XDocument(new XElement("movie", new XElement("title", "P01 老分 P"),
+    new XElement("plot", "用户自定义简介"))).Save(Path.ChangeExtension(oldBoxMovie, ".nfo"));
+new XDocument(new XElement("Item", new XElement("LocalTitle", "用户自定义合集标题"),
+    new XElement("Overview", "用户自定义合集简介"))).Save(Path.Combine(oldBoxFolder, "collection.xml"));
+await layoutStore.SaveAsync(new ArchiveRecord { Bvid = oldBoxBvid, Cid = 401,
+    Title = "标题:含/非法字符", Status = "completed", FilePath = oldBoxMovie }, CancellationToken.None);
+await layoutService.MigrateExistingArchivesAsync(layoutRoot, CancellationToken.None);
+var newBoxMovie = ArchiveService.MoviePath(layoutRoot, oldBoxBvid, "标题:含/非法字符", 1, 401, true, "老分 P");
+var newBoxFolder = Path.GetDirectoryName(Path.GetDirectoryName(newBoxMovie)!)!;
+if (!File.Exists(newBoxMovie) || Directory.Exists(oldBoxFolder) ||
+    Path.GetFileName(newBoxFolder) != $"标题 含 非法字符 [{oldBoxBvid}] [boxset]" ||
+    (string?)XDocument.Load(Path.Combine(newBoxFolder, "collection.xml")).Root?.Element("Overview") != "用户自定义合集简介" ||
+    (string?)XDocument.Load(Path.ChangeExtension(newBoxMovie, ".nfo")).Root?.Element("plot") != "用户自定义简介")
+    throw new Exception("旧版 BV 合集迁移未保留自定义元数据或正确清理旧目录。");
+var customMovieNfo = XDocument.Load(Path.ChangeExtension(newBoxMovie, ".nfo"));
+customMovieNfo.Root!.SetElementValue("title", "用户自定义电影名");
+customMovieNfo.Save(Path.ChangeExtension(newBoxMovie, ".nfo"));
+await layoutService.MigrateExistingArchivesAsync(layoutRoot, CancellationToken.None);
+if (!File.Exists(newBoxMovie) || Directory.Exists(oldBoxFolder) ||
+    (string?)XDocument.Load(Path.ChangeExtension(newBoxMovie, ".nfo")).Root?.Element("title") != "用户自定义电影名")
+    throw new Exception("标题目录迁移再次运行后不应改名或生成旧目录。");
+var renamedVideo = new VideoInfo(oldBoxBvid, "改名后的视频", string.Empty,
+    [new VideoPage(401, 1, "新分 P")], null, "新简介");
+await layoutService.MigrateVideoArchivesAsync(renamedVideo, layoutRoot, CancellationToken.None);
+var renamedMovie = ArchiveService.MoviePath(layoutRoot, oldBoxBvid, renamedVideo.Title, 1, 401, true, "新分 P");
+if (!File.Exists(renamedMovie) || Directory.Exists(newBoxFolder) ||
+    (await layoutStore.GetAsync(oldBoxBvid, 401, CancellationToken.None))?.FilePath != renamedMovie ||
+    (string?)XDocument.Load(Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(renamedMovie)!)!, "collection.xml"))
+        .Root?.Element("Overview") != "用户自定义合集简介")
+    throw new Exception("视频改名时未迁移合集元数据，或状态记录仍指向旧路径。");
+var duplicateTitle = ArchiveService.MoviePath(layoutRoot, "BV1xx411c7mK", "归档标题", 1, 501, false);
+if (Path.GetDirectoryName(duplicateTitle) == Path.GetDirectoryName(single))
+    throw new Exception("相同标题的不同 BV 不应共用目录。");
+var longTitle = ArchiveService.MoviePath(layoutRoot, "BV1xx411c7mL", string.Concat(Enumerable.Repeat("🚀标题", 80)),
+    1, 601, false);
+if (System.Text.Encoding.UTF8.GetByteCount(Path.GetFileName(longTitle)) > 255 ||
+    Path.GetFileNameWithoutExtension(longTitle).Contains('�'))
+    throw new Exception("长标题截断后不能超过文件系统文件名限制或拆断 Unicode 字符。");
 const long recentCid = 27_293_516_471L;
 using (var videoJson = JsonDocument.Parse("""{"title":"近期视频","pic":"","pages":[{"cid":27293516471,"page":1,"part":"正片"}]}"""))
 {

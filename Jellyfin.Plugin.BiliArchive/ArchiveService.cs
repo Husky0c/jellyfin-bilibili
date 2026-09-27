@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Jellyfin.Plugin.BiliArchive.Configuration;
@@ -348,7 +349,7 @@ public sealed class ArchiveService
         var prior = await _store.GetAsync(video.Bvid, page.Cid, ct).ConfigureAwait(false);
         var multiPage = video.Pages.Count > 1 ||
             prior?.FilePath?.Contains("[boxset]", StringComparison.OrdinalIgnoreCase) == true;
-        var final = MoviePath(config.ArchivePath, video.Bvid, page.Page, page.Cid, multiPage);
+        var final = MoviePath(config.ArchivePath, video.Bvid, video.Title, page.Page, page.Cid, multiPage, page.Part);
         var folder = Path.GetDirectoryName(final)!;
         if (prior is { Status: "completed", FilePath: not null } && File.Exists(prior.FilePath))
         {
@@ -413,11 +414,37 @@ public sealed class ArchiveService
         }
     }
 
-    internal static string MoviePath(string archivePath, string bvid, int page, long cid, bool multiPage)
+    internal static string MoviePath(string archivePath, string bvid, string title, int page, long cid,
+        bool multiPage, string? part = null)
     {
-        if (!multiPage) return Path.Combine(archivePath, bvid, bvid + ".mp4");
-        var name = $"P{page:D2}-{cid}";
-        return Path.Combine(archivePath, bvid + " [boxset]", name, name + ".mp4");
+        var folder = CollectionFolder(archivePath, bvid, title, multiPage);
+        if (!multiPage)
+        {
+            var name = Path.GetFileName(folder);
+            return Path.Combine(folder, name + ".mp4");
+        }
+        var pageName = $"P{page:D2}" + (string.IsNullOrWhiteSpace(part) ? string.Empty :
+            $" - {SafeName(part, "分P", 100)}") + $" (CID {cid})";
+        return Path.Combine(folder, pageName, pageName + ".mp4");
+    }
+
+    private static string CollectionFolder(string archivePath, string bvid, string title, bool multiPage) =>
+        Path.Combine(archivePath, $"{SafeName(title, bvid, 140)} [{bvid}]" + (multiPage ? " [boxset]" : string.Empty));
+
+    private static string SafeName(string? value, string fallback, int maxUtf8Bytes)
+    {
+        var clean = Regex.Replace(value ?? string.Empty, "[\\x00-\\x1f\\x7f<>:\"/\\\\|?*]", " ");
+        clean = Regex.Replace(clean, @"\s+", " ").Trim(' ', '.');
+        if (clean.Length == 0) clean = fallback;
+        var result = new StringBuilder();
+        var bytes = 0;
+        foreach (var rune in clean.EnumerateRunes())
+        {
+            if (bytes + rune.Utf8SequenceLength > maxUtf8Bytes) break;
+            result.Append(rune.ToString());
+            bytes += rune.Utf8SequenceLength;
+        }
+        return result.ToString().TrimEnd(' ', '.');
     }
 
     internal async Task MigrateVideoArchivesAsync(VideoInfo video, string archivePath, CancellationToken ct)
@@ -427,12 +454,19 @@ public sealed class ArchiveService
             .ToArray();
         var multiPage = video.Pages.Count > 1 || records.Length > 1 ||
             records.Any(x => x.FilePath!.Contains("[boxset]", StringComparison.OrdinalIgnoreCase));
+        var oldCollectionFolders = records.Select(x => x.FilePath!)
+            .Where(x => IsInArchiveRoot(x, archivePath))
+            .Select(x => FindBoxSetFolder(x, archivePath))
+            .Where(x => x is not null).Distinct(StringComparer.Ordinal).ToArray();
         foreach (var page in video.Pages)
         {
             var record = records.FirstOrDefault(x => x.Cid == page.Cid);
             if (record is not null)
-                await MoveArchiveAsync(record, archivePath, page.Page, multiPage, ct).ConfigureAwait(false);
+                await MoveArchiveAsync(record, archivePath, video.Title, page.Page, multiPage, page.Part, ct).ConfigureAwait(false);
         }
+        if (multiPage)
+            foreach (var oldFolder in oldCollectionFolders)
+                MoveCollectionMetadata(oldFolder!, CollectionFolder(archivePath, video.Bvid, video.Title, true));
         if (multiPage && records.Any(x => x.FilePath is not null && File.Exists(x.FilePath) &&
                 x.FilePath.Contains("[boxset]", StringComparison.OrdinalIgnoreCase) &&
                 IsInArchiveRoot(x.FilePath, archivePath)))
@@ -446,19 +480,34 @@ public sealed class ArchiveService
             .GroupBy(x => x.Bvid, StringComparer.Ordinal);
         foreach (var group in records)
         {
+            var oldCollectionFolders = group.Select(x => x.FilePath!)
+                .Where(x => IsInArchiveRoot(x, archivePath))
+                .Select(x => FindBoxSetFolder(x, archivePath))
+                .Where(x => x is not null).Distinct(StringComparer.Ordinal).ToArray();
             var entries = group.Select(x => (Record: x, Page: StoredPage(x)))
                 .Where(x => x.Page > 0).ToArray();
             var multiPage = group.Count() > 1 ||
                 group.Any(x => x.FilePath!.Contains("[boxset]", StringComparison.OrdinalIgnoreCase));
             foreach (var (record, page) in entries)
             {
-                try { await MoveArchiveAsync(record, archivePath, page, multiPage, ct).ConfigureAwait(false); }
+                if (IsTitledLayout(record.FilePath!, archivePath, record.Bvid)) continue;
+                try { await MoveArchiveAsync(record, archivePath, record.Title, page, multiPage,
+                    StoredPart(record, page), ct).ConfigureAwait(false); }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)
                 {
                     _logger.LogWarning(ex, "整理旧归档 {Bvid} / {Cid} 失败，保留原文件", record.Bvid, record.Cid);
                 }
             }
+            if (multiPage)
+                foreach (var oldFolder in oldCollectionFolders)
+                {
+                    try { MoveCollectionMetadata(oldFolder!, CollectionFolder(archivePath, group.Key, group.First().Title, true)); }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)
+                    {
+                        _logger.LogWarning(ex, "整理旧合集 {Bvid} 元数据失败，保留原文件", group.Key);
+                    }
+                }
             if (multiPage && entries.Any(x => x.Record.FilePath is not null && File.Exists(x.Record.FilePath) &&
                     x.Record.FilePath.Contains("[boxset]", StringComparison.OrdinalIgnoreCase) &&
                     IsInArchiveRoot(x.Record.FilePath, archivePath)))
@@ -473,8 +522,11 @@ public sealed class ArchiveService
         if (legacy > 0) return legacy;
         var name = Path.GetFileNameWithoutExtension(path);
         if (name == record.Bvid) return 1;
+        if (name.EndsWith($" [{record.Bvid}]", StringComparison.Ordinal)) return 1;
         var part = Regex.Match(name, $"^P([0-9]+)-{record.Cid}$", RegexOptions.CultureInvariant);
         if (part.Success && int.TryParse(part.Groups[1].Value, out var partNumber)) return partNumber;
+        part = Regex.Match(name, $@"^P([0-9]+)(?: - .+)? \(CID {record.Cid}\)$", RegexOptions.CultureInvariant);
+        if (part.Success && int.TryParse(part.Groups[1].Value, out partNumber)) return partNumber;
         var match = Regex.Match(name, "^" + Regex.Escape(record.Bvid) + @"-cd([0-9]+)$",
             RegexOptions.CultureInvariant);
         return match.Success && int.TryParse(match.Groups[1].Value, out var page) ? page : 0;
@@ -487,23 +539,79 @@ public sealed class ArchiveService
         return match.Success && int.TryParse(match.Groups[1].Value, out var page) ? page : 0;
     }
 
+    private static string? StoredPart(ArchiveRecord record, int page)
+    {
+        var path = Path.ChangeExtension(record.FilePath!, ".nfo");
+        if (!File.Exists(path)) return null;
+        try
+        {
+            var title = (string?)XDocument.Load(path).Root?.Element("title");
+            if (string.IsNullOrWhiteSpace(title)) return null;
+            var prefix = $"P{page:D2} ";
+            if (title.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return title[prefix.Length..];
+            prefix = record.Title + " - " + prefix;
+            return title.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? title[prefix.Length..] : null;
+        }
+        catch (System.Xml.XmlException) { return null; }
+    }
+
+    private static string? FindBoxSetFolder(string path, string archivePath)
+    {
+        var root = Path.GetFullPath(archivePath);
+        for (var parent = Path.GetDirectoryName(path); parent is not null &&
+             IsInArchiveRoot(parent, root); parent = Path.GetDirectoryName(parent))
+        {
+            if (Path.GetFileName(parent).EndsWith(" [boxset]", StringComparison.OrdinalIgnoreCase)) return parent;
+        }
+        return null;
+    }
+
+    private static bool IsTitledLayout(string path, string archivePath, string bvid)
+    {
+        if (!IsInArchiveRoot(path, archivePath)) return false;
+        var relative = Path.GetRelativePath(archivePath, path);
+        var rootName = relative.Split(Path.DirectorySeparatorChar)[0];
+        return rootName.EndsWith($" [{bvid}]", StringComparison.Ordinal) ||
+            rootName.EndsWith($" [{bvid}] [boxset]", StringComparison.Ordinal);
+    }
+
+    private static void MoveCollectionMetadata(string sourceFolder, string targetFolder)
+    {
+        if (Path.GetFullPath(sourceFolder) == Path.GetFullPath(targetFolder) || !Directory.Exists(sourceFolder) ||
+            Directory.EnumerateFiles(sourceFolder, "*.mp4", SearchOption.AllDirectories).Any()) return;
+        var oldMetadata = Path.Combine(sourceFolder, "collection.xml");
+        var newMetadata = Path.Combine(targetFolder, "collection.xml");
+        if (File.Exists(oldMetadata))
+        {
+            if (File.Exists(newMetadata)) return;
+            Directory.CreateDirectory(targetFolder);
+            File.Move(oldMetadata, newMetadata);
+        }
+        TryDeleteEmptyDirectory(sourceFolder);
+    }
+
     private static bool IsInArchiveRoot(string path, string archivePath)
     {
         var root = Path.GetFullPath(archivePath).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
         return Path.GetFullPath(path).StartsWith(root, StringComparison.Ordinal);
     }
 
-    private async Task MoveArchiveAsync(ArchiveRecord record, string archivePath, int page, bool multiPage, CancellationToken ct)
+    private async Task MoveArchiveAsync(ArchiveRecord record, string archivePath, string title, int page,
+        bool multiPage, string? part, CancellationToken ct)
     {
         var source = record.FilePath!;
-        var target = MoviePath(archivePath, record.Bvid, page, record.Cid, multiPage);
+        var target = MoviePath(archivePath, record.Bvid, title, page, record.Cid, multiPage, part);
         if (!IsInArchiveRoot(source, archivePath) ||
             !File.Exists(source) || Path.GetFullPath(source) == Path.GetFullPath(target)) return;
         if (File.Exists(target)) throw new IOException($"归档迁移目标已存在，请检查：{target}");
         var sourceNfo = Path.ChangeExtension(source, ".nfo");
         var targetNfo = Path.ChangeExtension(target, ".nfo");
+        var sourceDanmaku = Path.ChangeExtension(source, ".danmaku.ass");
+        var targetDanmaku = Path.ChangeExtension(target, ".danmaku.ass");
         if (File.Exists(targetNfo))
             throw new IOException($"归档迁移 NFO 目标已存在，请检查：{targetNfo}");
+        if (File.Exists(sourceDanmaku) && File.Exists(targetDanmaku))
+            throw new IOException($"归档迁移弹幕目标已存在，请检查：{targetDanmaku}");
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
         var movieNfo = Path.Combine(Path.GetDirectoryName(source)!, "movie.nfo");
         var originalNfo = File.Exists(sourceNfo) ? sourceNfo : File.Exists(movieNfo) ? movieNfo : null;
@@ -511,6 +619,7 @@ public sealed class ArchiveService
         try
         {
             if (originalNfo is not null) File.Move(originalNfo, targetNfo);
+            if (File.Exists(sourceDanmaku)) File.Move(sourceDanmaku, targetDanmaku);
             NormalizeMovieNfo(record, page, multiPage, targetNfo);
             record.FilePath = target;
             await _store.SaveAsync(record, ct).ConfigureAwait(false);
@@ -521,12 +630,14 @@ public sealed class ArchiveService
             if (originalNfo is not null && File.Exists(targetNfo) && !File.Exists(originalNfo))
                 File.Move(targetNfo, originalNfo);
             else if (originalNfo is null && File.Exists(targetNfo)) File.Delete(targetNfo);
+            if (File.Exists(targetDanmaku) && !File.Exists(sourceDanmaku)) File.Move(targetDanmaku, sourceDanmaku);
             if (File.Exists(target) && !File.Exists(source)) File.Move(target, source);
             throw;
         }
         var sourceFolder = Path.GetDirectoryName(source)!;
-        if (Directory.Exists(sourceFolder) && !Directory.EnumerateFileSystemEntries(sourceFolder).Any())
-            Directory.Delete(sourceFolder);
+        TryDeleteEmptyDirectory(sourceFolder);
+        var parent = Path.GetDirectoryName(sourceFolder);
+        if (parent is not null && IsInArchiveRoot(parent, archivePath)) TryDeleteEmptyDirectory(parent);
         _logger.LogInformation("已整理归档 {Bvid} / {Cid}：{Path}", record.Bvid, record.Cid, target);
     }
 
@@ -580,7 +691,7 @@ public sealed class ArchiveService
 
     private static void WriteCollectionMetadata(string archivePath, string bvid, string title, string description)
     {
-        var folder = Path.Combine(archivePath, bvid + " [boxset]");
+        var folder = CollectionFolder(archivePath, bvid, title, true);
         Directory.CreateDirectory(folder);
         var path = Path.Combine(folder, "collection.xml");
         if (!File.Exists(path))
