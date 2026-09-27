@@ -11,6 +11,7 @@ public sealed class ArchiveRecord
     public string Status { get; set; } = "pending";
     public string? FilePath { get; set; }
     public string? Error { get; set; }
+    public bool DanmakuFetched { get; set; }
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
@@ -114,6 +115,6 @@ public sealed class ArchiveStore
     private static ArchiveRecord Clone(ArchiveRecord x) => new()
     {
         Bvid = x.Bvid, Cid = x.Cid, Title = x.Title, Status = x.Status,
-        FilePath = x.FilePath, Error = x.Error, UpdatedAt = x.UpdatedAt
+        FilePath = x.FilePath, Error = x.Error, DanmakuFetched = x.DanmakuFetched, UpdatedAt = x.UpdatedAt
     };
 }

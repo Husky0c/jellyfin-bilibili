@@ -205,6 +205,20 @@ public sealed class BiliApi
         return new PlayStreams(video, audio);
     }
 
+    internal async Task<IReadOnlyList<DanmakuComment>> GetDanmakuAsync(string bvid, long cid, CancellationToken ct)
+    {
+        using var request = NewRequest($"https://api.bilibili.com/x/v1/dm/list.so?oid={cid.ToString(CultureInfo.InvariantCulture)}", true);
+        request.Headers.Referrer = new Uri("https://www.bilibili.com/video/" + bvid);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(30));
+        using var response = await Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false);
+        if (response.StatusCode is HttpStatusCode.TooManyRequests or HttpStatusCode.Forbidden)
+            throw new BiliRateLimitException((int)response.StatusCode);
+        response.EnsureSuccessStatusCode();
+        await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
+        return await DanmakuConverter.ParseAsync(stream, timeout.Token).ConfigureAwait(false);
+    }
+
     public async Task DownloadAsync(string url, string destination, string bvid, CancellationToken ct)
     {
         using var request = NewRequest(url, true);
