@@ -63,6 +63,7 @@ var bvid = "BV1xx411c7mF";
 var oldPage1 = Path.Combine(layoutRoot, bvid, "P01-101", "video.mp4");
 Directory.CreateDirectory(Path.GetDirectoryName(oldPage1)!);
 File.WriteAllBytes(oldPage1, [1, 2, 3]);
+File.WriteAllText(ArchiveService.DanmakuPath(oldPage1), "旧弹幕");
 new XDocument(new XElement("movie", new XElement("title", "归档标题 - P01 开篇"),
     new XElement("genre", "自定义分类"),
     new XElement("uniqueid", new XAttribute("type", "bilibili"), bvid + ":101")))
@@ -72,6 +73,8 @@ await layoutStore.SaveAsync(new ArchiveRecord { Bvid = bvid, Cid = 101, Title = 
 await layoutService.MigrateExistingArchivesAsync(layoutRoot, CancellationToken.None);
 var single = ArchiveService.MoviePath(layoutRoot, bvid, 1, 101, false);
 if (!File.Exists(single) || File.Exists(oldPage1) ||
+    File.Exists(ArchiveService.DanmakuPath(oldPage1)) ||
+    File.ReadAllText(ArchiveService.DanmakuPath(single)) != "旧弹幕" ||
     (await layoutStore.GetAsync(bvid, 101, CancellationToken.None))?.FilePath != single ||
     (string?)XDocument.Load(Path.ChangeExtension(single, ".nfo")).Root?.Element("title") != "归档标题" ||
     (string?)XDocument.Load(Path.ChangeExtension(single, ".nfo")).Root?.Element("genre") != "自定义分类")
@@ -91,6 +94,8 @@ ArchiveService.WriteNfo(multiVideo, multiVideo.Pages[0], part1);
 ArchiveService.WriteNfo(multiVideo, multiVideo.Pages[1], part2);
 var collection = XDocument.Load(Path.Combine(layoutRoot, bvid + " [boxset]", "collection.xml"));
 if (File.Exists(single) || !File.Exists(part1) || !File.Exists(part2) || File.Exists(oldPage2) ||
+    File.Exists(ArchiveService.DanmakuPath(single)) ||
+    File.ReadAllText(ArchiveService.DanmakuPath(part1)) != "旧弹幕" ||
     (await layoutStore.GetAsync(bvid, 101, CancellationToken.None))?.FilePath != part1 ||
     (await layoutStore.GetAsync(bvid, 102, CancellationToken.None))?.FilePath != part2 ||
     (string?)collection.Root?.Element("LocalTitle") != "归档标题" ||
@@ -157,6 +162,45 @@ if ((await third.GetAsync("BV1xx411c7mD", 123, CancellationToken.None))?.Status 
     throw new Exception("退出登录不应清理已归档状态。");
 if (third.ReadCookie() is not null)
     throw new Exception("退出登录应清理 Cookie。");
+
+const string danmakuXml = """<i><d p="1.25,1,25,16711680,0,0,0,0">红色{弹幕}\指令</d><d p="2,5,25,16777215,0,0,0,0">顶部</d><d p="3,6,25,255,0,0,0,0">反向</d><d p="4,7,25,0,0,0,0,0">高级弹幕</d><d p="bad,1,25,0">坏时间</d></i>""";
+using (var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(danmakuXml)))
+{
+    var comments = await DanmakuConverter.ParseAsync(stream, CancellationToken.None);
+    var ass = DanmakuConverter.ToAss(comments);
+    if (comments.Count != 3 || !ass.Contains("Dialogue: 0,0:00:01.25", StringComparison.Ordinal) ||
+        !ass.Contains("\\c&H0000FF&", StringComparison.Ordinal) ||
+        !ass.Contains("红色（弹幕）\\\\指令", StringComparison.Ordinal) ||
+        !ass.Contains("\\an8\\pos(960,60)", StringComparison.Ordinal) ||
+        !ass.Contains("\\an7\\move(-", StringComparison.Ordinal) ||
+        ass.Contains("高级弹幕", StringComparison.Ordinal))
+        throw new Exception("弹幕 XML 解析、ASS 时间/颜色/位置或文本转义失败。");
+}
+try
+{
+    using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes("<!DOCTYPE i [<!ENTITY x SYSTEM 'file:///etc/passwd'>]><i><d p='1,1,25,0'>&x;</d></i>"));
+    await DanmakuConverter.ParseAsync(stream, CancellationToken.None);
+    throw new Exception("不应接受带 DTD 的弹幕 XML。");
+}
+catch (System.Xml.XmlException) { }
+var fetchedRecord = await layoutStore.GetAsync(bvid, 101, CancellationToken.None) ?? throw new Exception("归档记录丢失。");
+fetchedRecord.DanmakuFetched = true;
+await layoutStore.SaveAsync(fetchedRecord, CancellationToken.None);
+if (!(await new ArchiveStore(Path.Combine(folder, "movie-state")).GetAsync(bvid, 101, CancellationToken.None))!.DanmakuFetched)
+    throw new Exception("弹幕同步状态未持久化。");
+var secondPartRecord = await layoutStore.GetAsync(bvid, 102, CancellationToken.None) ?? throw new Exception("第二分 P 记录丢失。");
+secondPartRecord.DanmakuFetched = true;
+await layoutStore.SaveAsync(secondPartRecord, CancellationToken.None);
+var danmakuBackfill = new SyncState();
+danmakuBackfill.Folders[42] = new FolderSyncState { KnownBvids = [bvid] };
+await layoutService.QueueMetadataBackfillAsync(danmakuBackfill, layoutRoot, [42], CancellationToken.None);
+if (danmakuBackfill.Pending.ContainsKey(bvid))
+    throw new Exception("已补齐弹幕和元数据的视频不应重复入队。");
+fetchedRecord.DanmakuFetched = false;
+await layoutStore.SaveAsync(fetchedRecord, CancellationToken.None);
+await layoutService.QueueMetadataBackfillAsync(danmakuBackfill, layoutRoot, [42], CancellationToken.None);
+if (!danmakuBackfill.Pending.ContainsKey(bvid))
+    throw new Exception("旧归档缺少弹幕时应加入分批补齐队列。");
 
 if (!typeof(BiliApi).Assembly.GetManifestResourceNames().Contains("Jellyfin.Plugin.BiliArchive.Configuration.configPage.html"))
     throw new Exception("Jellyfin 配置页未嵌入插件 DLL。");
@@ -227,4 +271,4 @@ if (!ArchiveService.IsUnavailableVideoError(new BiliApiException(62012)) ||
     !new BiliApiException(62012).Message.Contains("仅 UP 主可见", StringComparison.Ordinal))
     throw new Exception("不可访问视频的错误码分类或提示不正确。");
 
-Console.WriteLine("PASS: 大 CID、UP 主同名 NFO 与旧版迁移、无音轨 DASH、手动重试；不可访问错误码；BV/CID、增量游标与重试队列持久化；差异检测、退避、配置页、二维码。");
+Console.WriteLine("PASS: 弹幕 XML/ASS 与旧归档字幕迁移；大 CID、UP 主 NFO、无音轨 DASH、手动重试；不可访问错误码；状态与队列持久化；差异检测、退避、配置页、二维码。");

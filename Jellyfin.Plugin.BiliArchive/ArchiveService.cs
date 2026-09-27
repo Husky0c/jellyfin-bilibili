@@ -301,7 +301,7 @@ public sealed class ArchiveService
                  .GroupBy(x => x.Bvid, StringComparer.Ordinal))
         {
             if (state.Pending.ContainsKey(group.Key) || !IsSelected(group.Key, state, folderIds) ||
-                !group.Any(NeedsMetadataBackfill)) continue;
+                !group.Any(x => NeedsMetadataBackfill(x) || !x.DanmakuFetched)) continue;
             state.Pending[group.Key] = new PendingVideo { Bvid = group.Key };
             if (++added == 10) break;
         }
@@ -356,13 +356,16 @@ public sealed class ArchiveService
             if (multiPage && IsInArchiveRoot(prior.FilePath, config.ArchivePath) &&
                 prior.FilePath.Contains("[boxset]", StringComparison.OrdinalIgnoreCase))
                 WriteCollectionMetadata(config.ArchivePath, video.Bvid, video.Title, video.Description);
+            await EnsureDanmakuAsync(video, page, prior, prior.FilePath, ct).ConfigureAwait(false);
             return;
         }
         if (File.Exists(final) && new FileInfo(final).Length > 0)
         {
             WriteNfo(video, page, final);
             if (multiPage) WriteCollectionMetadata(config.ArchivePath, video.Bvid, video.Title, video.Description);
-            await _store.SaveAsync(new ArchiveRecord { Bvid = video.Bvid, Cid = page.Cid, Title = video.Title, Status = "completed", FilePath = final }, ct).ConfigureAwait(false);
+            var recovered = new ArchiveRecord { Bvid = video.Bvid, Cid = page.Cid, Title = video.Title, Status = "completed", FilePath = final };
+            await _store.SaveAsync(recovered, ct).ConfigureAwait(false);
+            await EnsureDanmakuAsync(video, page, recovered, final, ct).ConfigureAwait(false);
             return;
         }
 
@@ -411,7 +414,43 @@ public sealed class ArchiveService
                 if (multiPage) TryDeleteEmptyDirectory(Path.GetDirectoryName(folder)!);
             }
         }
+        if (record.Status == "completed")
+            await EnsureDanmakuAsync(video, page, record, final, ct).ConfigureAwait(false);
     }
+
+    private async Task EnsureDanmakuAsync(VideoInfo video, VideoPage page, ArchiveRecord record, string videoPath, CancellationToken ct)
+    {
+        if (record.DanmakuFetched) return;
+        var subtitle = DanmakuPath(videoPath);
+        try
+        {
+            if (!File.Exists(subtitle))
+            {
+                var comments = await _api.GetDanmakuAsync(video.Bvid, page.Cid, ct).ConfigureAwait(false);
+                if (comments.Count > 0)
+                {
+                    var temp = subtitle + ".tmp";
+                    try
+                    {
+                        await File.WriteAllTextAsync(temp, DanmakuConverter.ToAss(comments), ct).ConfigureAwait(false);
+                        File.Move(temp, subtitle);
+                    }
+                    finally { TryDelete(temp); }
+                }
+            }
+            record.DanmakuFetched = true;
+            await _store.SaveAsync(record, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (BiliLoginException) { throw; }
+        catch (BiliRateLimitException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "获取 {Bvid} / {Cid} 弹幕失败，稍后重试", video.Bvid, page.Cid);
+        }
+    }
+
+    internal static string DanmakuPath(string videoPath) => Path.ChangeExtension(videoPath, ".danmaku.ass");
 
     internal static string MoviePath(string archivePath, string bvid, int page, long cid, bool multiPage)
     {
@@ -502,15 +541,25 @@ public sealed class ArchiveService
         if (File.Exists(target)) throw new IOException($"归档迁移目标已存在，请检查：{target}");
         var sourceNfo = Path.ChangeExtension(source, ".nfo");
         var targetNfo = Path.ChangeExtension(target, ".nfo");
+        var sourceDanmaku = DanmakuPath(source);
+        var targetDanmaku = DanmakuPath(target);
         if (File.Exists(targetNfo))
             throw new IOException($"归档迁移 NFO 目标已存在，请检查：{targetNfo}");
+        if (File.Exists(targetDanmaku))
+            throw new IOException($"归档迁移弹幕目标已存在，请检查：{targetDanmaku}");
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
         var movieNfo = Path.Combine(Path.GetDirectoryName(source)!, "movie.nfo");
         var originalNfo = File.Exists(sourceNfo) ? sourceNfo : File.Exists(movieNfo) ? movieNfo : null;
+        var movedDanmaku = false;
         File.Move(source, target);
         try
         {
             if (originalNfo is not null) File.Move(originalNfo, targetNfo);
+            if (File.Exists(sourceDanmaku))
+            {
+                File.Move(sourceDanmaku, targetDanmaku);
+                movedDanmaku = true;
+            }
             NormalizeMovieNfo(record, page, multiPage, targetNfo);
             record.FilePath = target;
             await _store.SaveAsync(record, ct).ConfigureAwait(false);
@@ -518,6 +567,8 @@ public sealed class ArchiveService
         catch
         {
             record.FilePath = source;
+            if (movedDanmaku && File.Exists(targetDanmaku) && !File.Exists(sourceDanmaku))
+                File.Move(targetDanmaku, sourceDanmaku);
             if (originalNfo is not null && File.Exists(targetNfo) && !File.Exists(originalNfo))
                 File.Move(targetNfo, originalNfo);
             else if (originalNfo is null && File.Exists(targetNfo)) File.Delete(targetNfo);
