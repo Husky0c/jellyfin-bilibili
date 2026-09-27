@@ -2,6 +2,30 @@
   {
     "versions": [
       {
+        "version": "1.3.0.0",
+        "changelog": "1.3.0.0 为每个分 P 获取 B 站当前弹幕池，生成可在 Jellyfin 字幕菜单选择的外挂 ASS 弹幕；旧归档会分批补齐，已有弹幕文件不会被覆盖。支持滚动、顶部和底部普通弹幕，高级弹幕暂不转换。升级后请重新扫描媒体库以发现新增字幕。",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/Husky0c/jellyfin-bilibili/releases/download/v1.3.0.0/BiliArchive_1.3.0.0_Jellyfin-12-anycpu.zip",
+        "checksum": "6b5a0ff1915623a2252e478c83bf5b63",
+        "timestamp": "2026-09-27T13:28:53Z"
+      },
+      {
+        "version": "1.3.0.0",
+        "changelog": "1.3.0.0 为每个分 P 获取 B 站当前弹幕池，生成可在 Jellyfin 字幕菜单选择的外挂 ASS 弹幕；旧归档会分批补齐，已有弹幕文件不会被覆盖。支持滚动、顶部和底部普通弹幕，高级弹幕暂不转换。升级后请重新扫描媒体库以发现新增字幕。",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/Husky0c/jellyfin-bilibili/releases/download/v1.3.0.0/BiliArchive_1.3.0.0_Jellyfin-10.11-anycpu.zip",
+        "checksum": "845982c552982b41908d982c8bb7427a",
+        "timestamp": "2026-09-27T13:28:53Z"
+      },
+      {
+        "version": "1.3.0.0",
+        "changelog": "1.3.0.0 为每个分 P 获取 B 站当前弹幕池，生成可在 Jellyfin 字幕菜单选择的外挂 ASS 弹幕；旧归档会分批补齐，已有弹幕文件不会被覆盖。支持滚动、顶部和底部普通弹幕，高级弹幕暂不转换。升级后请重新扫描媒体库以发现新增字幕。",
+        "targetAbi": "10.10.7.0",
+        "sourceUrl": "https://github.com/Husky0c/jellyfin-bilibili/releases/download/v1.3.0.0/BiliArchive_1.3.0.0_Jellyfin-10.10-anycpu.zip",
+        "checksum": "e950c762393b1e9c850b39dc2808507e",
+        "timestamp": "2026-09-27T13:28:53Z"
+      },
+      {
         "version": "1.2.5.0",
         "changelog": "1.2.5.0 修正多 P 展示：单 P 保持独立电影，多 P 改为 Jellyfin 电影库中的 BV 合集，每个 P 是可单独选择、展示元数据并记录观看进度的电影条目。合集保存整条视频标题与简介；各 P 的同名 NFO 保存分 P 名称、整体简介、UP 主演员、封面来源和独立 BV/CID。B 站接口没有独立分 P 简介时，简介以 P 名称与整条视频简介组成。归档任务会整理 1.2.4.0 的 `cd01/cd02` 文件和更早的 `P序号-CID/video.mp4`，不覆盖目标文件；已归档且仍在所选收藏夹中的视频会逐批补全元数据而不重新下载。迁移前请备份归档目录，完成后重新扫描电影媒体库。建议关闭在线电影元数据提供者。",
         "targetAbi": "12.0.0.0",
