@@ -78,6 +78,7 @@ public sealed class ArchiveService
 
             foreach (var id in config.FolderIds.Distinct())
                 state.Folders.TryAdd(id, new FolderSyncState());
+            await QueueMetadataBackfillAsync(state, config.ArchivePath, config.FolderIds, ct).ConfigureAwait(false);
 
             var pollDue = config.FolderIds.Any(id => force || state.Folders[id].NextCheckAt <= now);
             var reconcileDue = config.FolderIds.Any(id => force || state.Folders[id].NextReconcileAt <= now);
@@ -290,6 +291,42 @@ public sealed class ArchiveService
             .Where(x => IsSelected(x.Bvid, state, folderIds))
             .OrderByDescending(x => x.IsNewFavorite).ThenBy(x => x.NextAttemptAt).ThenBy(x => x.DiscoveredAt).Take(10).ToArray();
 
+    internal async Task QueueMetadataBackfillAsync(SyncState state, string archivePath,
+        IReadOnlyCollection<long> folderIds, CancellationToken ct)
+    {
+        var records = await _store.ListAsync(ct).ConfigureAwait(false);
+        var added = 0;
+        foreach (var group in records.Where(x => x.Status == "completed" && x.FilePath is not null &&
+                     File.Exists(x.FilePath) && IsInArchiveRoot(x.FilePath, archivePath))
+                 .GroupBy(x => x.Bvid, StringComparer.Ordinal))
+        {
+            if (state.Pending.ContainsKey(group.Key) || !IsSelected(group.Key, state, folderIds) ||
+                !group.Any(NeedsMetadataBackfill)) continue;
+            state.Pending[group.Key] = new PendingVideo { Bvid = group.Key };
+            if (++added == 10) break;
+        }
+        if (added > 0) await _syncStore.SaveAsync(state, ct).ConfigureAwait(false);
+    }
+
+    private static bool NeedsMetadataBackfill(ArchiveRecord record)
+    {
+        var path = Path.ChangeExtension(record.FilePath!, ".nfo");
+        if (!File.Exists(path)) return true;
+        try
+        {
+            var plot = (string?)XDocument.Load(path).Root?.Element("plot");
+            if (plot is null) return true;
+            return IsLegacyPluginPlot(plot, record.Bvid, record.Cid);
+        }
+        catch (System.Xml.XmlException) { return false; }
+    }
+
+    private static bool IsLegacyPluginPlot(string? plot, string bvid, long cid) =>
+        plot is not null && Regex.IsMatch(plot,
+            "^Bilibili " + Regex.Escape(bvid) + " / CID " + cid +
+            @"(?:\nUP主：[^\n]*\nUP主页：https://space\.bilibili\.com/[0-9]+)?$",
+            RegexOptions.CultureInvariant);
+
     internal static bool IsUnavailableVideoError(Exception ex) =>
         ex is BiliApiException { Code: -404 or 62002 or 62012 };
 
@@ -309,16 +346,22 @@ public sealed class ArchiveService
     private async Task ArchivePageAsync(VideoInfo video, VideoPage page, PluginConfiguration config, CancellationToken ct)
     {
         var prior = await _store.GetAsync(video.Bvid, page.Cid, ct).ConfigureAwait(false);
-        var folder = Path.Combine(config.ArchivePath, video.Bvid);
-        var final = MoviePath(config.ArchivePath, video.Bvid, page.Page, video.Pages.Count > 1);
+        var multiPage = video.Pages.Count > 1 ||
+            prior?.FilePath?.Contains("[boxset]", StringComparison.OrdinalIgnoreCase) == true;
+        var final = MoviePath(config.ArchivePath, video.Bvid, page.Page, page.Cid, multiPage);
+        var folder = Path.GetDirectoryName(final)!;
         if (prior is { Status: "completed", FilePath: not null } && File.Exists(prior.FilePath))
         {
             WriteNfo(video, page, prior.FilePath);
+            if (multiPage && IsInArchiveRoot(prior.FilePath, config.ArchivePath) &&
+                prior.FilePath.Contains("[boxset]", StringComparison.OrdinalIgnoreCase))
+                WriteCollectionMetadata(config.ArchivePath, video.Bvid, video.Title, video.Description);
             return;
         }
         if (File.Exists(final) && new FileInfo(final).Length > 0)
         {
             WriteNfo(video, page, final);
+            if (multiPage) WriteCollectionMetadata(config.ArchivePath, video.Bvid, video.Title, video.Description);
             await _store.SaveAsync(new ArchiveRecord { Bvid = video.Bvid, Cid = page.Cid, Title = video.Title, Status = "completed", FilePath = final }, ct).ConfigureAwait(false);
             return;
         }
@@ -340,6 +383,7 @@ public sealed class ArchiveService
                 throw new IOException("FFmpeg 没有生成有效的输出文件。");
             File.Move(outputPart, final, true);
             WriteNfo(video, page, final);
+            if (multiPage) WriteCollectionMetadata(config.ArchivePath, video.Bvid, video.Title, video.Description);
             record.Status = "completed";
             record.FilePath = final;
             record.Error = null;
@@ -361,24 +405,38 @@ public sealed class ArchiveService
             TryDelete(videoPart);
             TryDelete(audioPart);
             TryDelete(outputPart);
+            if (!File.Exists(final))
+            {
+                TryDeleteEmptyDirectory(folder);
+                if (multiPage) TryDeleteEmptyDirectory(Path.GetDirectoryName(folder)!);
+            }
         }
     }
 
-    internal static string MoviePath(string archivePath, string bvid, int page, bool multiPage) =>
-        Path.Combine(archivePath, bvid, multiPage ? $"{bvid}-cd{page:D2}.mp4" : $"{bvid}.mp4");
+    internal static string MoviePath(string archivePath, string bvid, int page, long cid, bool multiPage)
+    {
+        if (!multiPage) return Path.Combine(archivePath, bvid, bvid + ".mp4");
+        var name = $"P{page:D2}-{cid}";
+        return Path.Combine(archivePath, bvid + " [boxset]", name, name + ".mp4");
+    }
 
     internal async Task MigrateVideoArchivesAsync(VideoInfo video, string archivePath, CancellationToken ct)
     {
         var records = (await _store.ListAsync(ct).ConfigureAwait(false))
             .Where(x => x.Bvid == video.Bvid && x.Status == "completed" && x.FilePath is not null)
             .ToArray();
-        var multiPage = video.Pages.Count > 1 || records.Length > 1;
+        var multiPage = video.Pages.Count > 1 || records.Length > 1 ||
+            records.Any(x => x.FilePath!.Contains("[boxset]", StringComparison.OrdinalIgnoreCase));
         foreach (var page in video.Pages)
         {
             var record = records.FirstOrDefault(x => x.Cid == page.Cid);
             if (record is not null)
                 await MoveArchiveAsync(record, archivePath, page.Page, multiPage, ct).ConfigureAwait(false);
         }
+        if (multiPage && records.Any(x => x.FilePath is not null && File.Exists(x.FilePath) &&
+                x.FilePath.Contains("[boxset]", StringComparison.OrdinalIgnoreCase) &&
+                IsInArchiveRoot(x.FilePath, archivePath)))
+            WriteCollectionMetadata(archivePath, video.Bvid, video.Title, video.Description);
     }
 
     internal async Task MigrateExistingArchivesAsync(string archivePath, CancellationToken ct)
@@ -390,7 +448,8 @@ public sealed class ArchiveService
         {
             var entries = group.Select(x => (Record: x, Page: StoredPage(x)))
                 .Where(x => x.Page > 0).ToArray();
-            var multiPage = group.Count() > 1;
+            var multiPage = group.Count() > 1 ||
+                group.Any(x => x.FilePath!.Contains("[boxset]", StringComparison.OrdinalIgnoreCase));
             foreach (var (record, page) in entries)
             {
                 try { await MoveArchiveAsync(record, archivePath, page, multiPage, ct).ConfigureAwait(false); }
@@ -400,6 +459,10 @@ public sealed class ArchiveService
                     _logger.LogWarning(ex, "整理旧归档 {Bvid} / {Cid} 失败，保留原文件", record.Bvid, record.Cid);
                 }
             }
+            if (multiPage && entries.Any(x => x.Record.FilePath is not null && File.Exists(x.Record.FilePath) &&
+                    x.Record.FilePath.Contains("[boxset]", StringComparison.OrdinalIgnoreCase) &&
+                    IsInArchiveRoot(x.Record.FilePath, archivePath)))
+                WriteCollectionMetadata(archivePath, group.Key, group.First().Title, string.Empty);
         }
     }
 
@@ -410,6 +473,8 @@ public sealed class ArchiveService
         if (legacy > 0) return legacy;
         var name = Path.GetFileNameWithoutExtension(path);
         if (name == record.Bvid) return 1;
+        var part = Regex.Match(name, $"^P([0-9]+)-{record.Cid}$", RegexOptions.CultureInvariant);
+        if (part.Success && int.TryParse(part.Groups[1].Value, out var partNumber)) return partNumber;
         var match = Regex.Match(name, "^" + Regex.Escape(record.Bvid) + @"-cd([0-9]+)$",
             RegexOptions.CultureInvariant);
         return match.Success && int.TryParse(match.Groups[1].Value, out var page) ? page : 0;
@@ -422,12 +487,17 @@ public sealed class ArchiveService
         return match.Success && int.TryParse(match.Groups[1].Value, out var page) ? page : 0;
     }
 
+    private static bool IsInArchiveRoot(string path, string archivePath)
+    {
+        var root = Path.GetFullPath(archivePath).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        return Path.GetFullPath(path).StartsWith(root, StringComparison.Ordinal);
+    }
+
     private async Task MoveArchiveAsync(ArchiveRecord record, string archivePath, int page, bool multiPage, CancellationToken ct)
     {
         var source = record.FilePath!;
-        var target = MoviePath(archivePath, record.Bvid, page, multiPage);
-        var root = Path.GetFullPath(archivePath).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        if (!Path.GetFullPath(source).StartsWith(root, StringComparison.Ordinal) ||
+        var target = MoviePath(archivePath, record.Bvid, page, record.Cid, multiPage);
+        if (!IsInArchiveRoot(source, archivePath) ||
             !File.Exists(source) || Path.GetFullPath(source) == Path.GetFullPath(target)) return;
         if (File.Exists(target)) throw new IOException($"归档迁移目标已存在，请检查：{target}");
         var sourceNfo = Path.ChangeExtension(source, ".nfo");
@@ -441,7 +511,7 @@ public sealed class ArchiveService
         try
         {
             if (originalNfo is not null) File.Move(originalNfo, targetNfo);
-            NormalizeMovieNfo(record, targetNfo);
+            NormalizeMovieNfo(record, page, multiPage, targetNfo);
             record.FilePath = target;
             await _store.SaveAsync(record, ct).ConfigureAwait(false);
         }
@@ -460,14 +530,16 @@ public sealed class ArchiveService
         _logger.LogInformation("已整理归档 {Bvid} / {Cid}：{Path}", record.Bvid, record.Cid, target);
     }
 
-    private static void NormalizeMovieNfo(ArchiveRecord record, string path)
+    private static void NormalizeMovieNfo(ArchiveRecord record, int page, bool multiPage, string path)
     {
+        var fallbackTitle = multiPage ? $"P{page:D2}" : record.Title;
+        var id = multiPage ? record.Bvid + ":" + record.Cid : record.Bvid;
         if (!File.Exists(path))
         {
-            new XDocument(new XElement("movie", new XElement("title", record.Title),
+            new XDocument(new XElement("movie", new XElement("title", fallbackTitle),
                 new XElement("plot", $"Bilibili {record.Bvid} / CID {record.Cid}"),
                 new XElement("uniqueid", new XAttribute("type", "bilibili"),
-                    new XAttribute("default", "true"), record.Bvid))).Save(path);
+                    new XAttribute("default", "true"), id))).Save(path);
             return;
         }
         var nfo = XDocument.Load(path);
@@ -475,19 +547,63 @@ public sealed class ArchiveService
         if (root is null) return;
         var changed = false;
         var title = (string?)root.Element("title");
-        if (title is not null && Regex.IsMatch(title,
-                "^" + Regex.Escape(record.Title) + @" - P[0-9]+ .+$", RegexOptions.CultureInvariant))
+        if (multiPage && title == record.Title)
+        {
+            root.SetElementValue("title", fallbackTitle);
+            changed = true;
+        }
+        else if (multiPage && title is not null && title.StartsWith(record.Title + " - ", StringComparison.Ordinal))
+        {
+            root.SetElementValue("title", title[(record.Title.Length + 3)..]);
+            changed = true;
+        }
+        else if (!multiPage && title is not null && Regex.IsMatch(title,
+                     "^" + Regex.Escape(record.Title) + @" - P[0-9]+ .+$", RegexOptions.CultureInvariant))
         {
             root.SetElementValue("title", record.Title);
             changed = true;
         }
-        var id = root.Elements("uniqueid").FirstOrDefault(x => (string?)x.Attribute("type") == "bilibili");
-        if (id?.Value == record.Bvid + ":" + record.Cid)
+        var uniqueId = root.Elements("uniqueid").FirstOrDefault(x => (string?)x.Attribute("type") == "bilibili");
+        if (uniqueId is not null && uniqueId.Value != id &&
+            (uniqueId.Value == record.Bvid || uniqueId.Value == record.Bvid + ":" + record.Cid))
         {
-            id.Value = record.Bvid;
+            uniqueId.Value = id;
+            changed = true;
+        }
+        if (multiPage && root.Element("sorttitle") is null)
+        {
+            root.Add(new XElement("sorttitle", $"P{page:D2}"));
             changed = true;
         }
         if (changed) nfo.Save(path);
+    }
+
+    private static void WriteCollectionMetadata(string archivePath, string bvid, string title, string description)
+    {
+        var folder = Path.Combine(archivePath, bvid + " [boxset]");
+        Directory.CreateDirectory(folder);
+        var path = Path.Combine(folder, "collection.xml");
+        if (!File.Exists(path))
+        {
+            new XDocument(new XElement("Item", new XElement("LocalTitle", title),
+                new XElement("Overview", description))).Save(path);
+            return;
+        }
+        var xml = XDocument.Load(path);
+        if (xml.Root?.Name != "Item") return;
+        var changed = false;
+        if (string.IsNullOrWhiteSpace((string?)xml.Root.Element("LocalTitle")))
+        {
+            xml.Root.SetElementValue("LocalTitle", title);
+            changed = true;
+        }
+        if (string.IsNullOrWhiteSpace((string?)xml.Root.Element("Overview")) &&
+            !string.IsNullOrWhiteSpace(description))
+        {
+            xml.Root.SetElementValue("Overview", description);
+            changed = true;
+        }
+        if (changed) xml.Save(path);
     }
 
     private async Task MarkUnavailableAsync(FavoriteVideo video, CancellationToken ct)
@@ -540,11 +656,17 @@ public sealed class ArchiveService
     {
         var nfoPath = Path.ChangeExtension(videoPath, ".nfo");
         var legacyPath = Path.Combine(Path.GetDirectoryName(videoPath)!, "movie.nfo");
-        var title = video.Title;
-        var id = video.Bvid;
-        var plot = $"Bilibili {video.Bvid} / CID {page.Cid}";
+        var multiPage = video.Pages.Count > 1 || videoPath.Contains("[boxset]", StringComparison.OrdinalIgnoreCase);
+        var partTitle = string.IsNullOrWhiteSpace(page.Part) ? $"P{page.Page:D2}" : $"P{page.Page:D2} {page.Part}";
+        var title = multiPage ? partTitle : video.Title;
+        var id = multiPage ? video.Bvid + ":" + page.Cid : video.Bvid;
+        var plot = multiPage ? $"{video.Title} · {partTitle}" : video.Title;
+        if (!string.IsNullOrWhiteSpace(video.Description)) plot += "\n\n" + video.Description.Trim();
+        plot += $"\n\nBilibili {video.Bvid} / CID {page.Cid}\nhttps://www.bilibili.com/video/{video.Bvid}?p={page.Page}";
         if (video.Uploader is { Mid: > 0 } creator)
+        {
             plot += $"\nUP主：{creator.Name}\nUP主页：https://space.bilibili.com/{creator.Mid}";
+        }
         var nfo = File.Exists(nfoPath) ? XDocument.Load(nfoPath) : new XDocument(new XElement("movie",
             new XElement("title", title),
             new XElement("plot", plot),
@@ -552,15 +674,35 @@ public sealed class ArchiveService
         var root = nfo.Root ?? throw new InvalidDataException($"NFO 没有根元素：{nfoPath}");
         var changed = !File.Exists(nfoPath);
         var oldTitle = $"{video.Title} - P{page.Page:D2} {page.Part}";
-        if ((string?)root.Element("title") == oldTitle)
+        var currentTitle = (string?)root.Element("title");
+        if (currentTitle == oldTitle || (multiPage && (currentTitle == video.Title ||
+                currentTitle == $"P{page.Page:D2}")))
         {
             root.SetElementValue("title", title);
             changed = true;
         }
+        var currentPlot = (string?)root.Element("plot");
+        if (currentPlot is null || IsLegacyPluginPlot(currentPlot, video.Bvid, page.Cid))
+        {
+            root.SetElementValue("plot", plot);
+            changed = true;
+        }
         var uniqueId = root.Elements("uniqueid").FirstOrDefault(x => (string?)x.Attribute("type") == "bilibili");
-        if (uniqueId is not null && uniqueId.Value == video.Bvid + ":" + page.Cid)
+        if (uniqueId is not null && uniqueId.Value != id &&
+            (uniqueId.Value == video.Bvid || uniqueId.Value == video.Bvid + ":" + page.Cid))
         {
             uniqueId.Value = id;
+            changed = true;
+        }
+        if (multiPage && root.Element("sorttitle") is null)
+        {
+            root.Add(new XElement("sorttitle", $"P{page.Page:D2}"));
+            changed = true;
+        }
+        var image = !string.IsNullOrWhiteSpace(page.FirstFrame) ? page.FirstFrame : video.Cover;
+        if (!string.IsNullOrWhiteSpace(image) && root.Element("thumb") is null)
+        {
+            root.Add(new XElement("thumb", image));
             changed = true;
         }
         if (video.Uploader is { Name: var name } uploader && !string.IsNullOrWhiteSpace(name))
@@ -619,5 +761,16 @@ public sealed class ArchiveService
     {
         try { if (File.Exists(path)) File.Delete(path); }
         catch (IOException) { }
+    }
+
+    private static void TryDeleteEmptyDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path) && !Directory.EnumerateFileSystemEntries(path).Any())
+                Directory.Delete(path);
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
     }
 }

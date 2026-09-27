@@ -20,10 +20,11 @@ var record = await second.GetAsync("BV1xx411c7mD", 123, CancellationToken.None);
 if (record?.Status != "completed" || record.FilePath is null)
     throw new Exception("BV/CID 完成状态未持久化。");
 const long largeCid = 3_000_000_123L;
-using (var videoJson = JsonDocument.Parse("""{"title":"大 CID 测试","pic":"","owner":{"mid":123456,"name":"测试 UP 主","face":"https://example.org/avatar?x=1&y=2"},"pages":[{"cid":3000000123,"page":1,"part":"正片"}]}"""))
+using (var videoJson = JsonDocument.Parse("""{"title":"大 CID 测试","desc":"视频简介","pic":"https://example.org/cover.jpg","owner":{"mid":123456,"name":"测试 UP 主","face":"https://example.org/avatar?x=1&y=2"},"pages":[{"cid":3000000123,"page":1,"part":"正片","first_frame":"https://example.org/p1.jpg"}]}"""))
 {
     var video = BiliApi.ParseVideoInfo("BV1xx411c7mD", videoJson.RootElement);
-    if (video.Pages.Count != 1 || video.Pages[0].Cid != largeCid || video.Uploader?.Mid != 123456)
+    if (video.Pages.Count != 1 || video.Pages[0].Cid != largeCid || video.Uploader?.Mid != 123456 ||
+        video.Description != "视频简介" || video.Pages[0].FirstFrame != "https://example.org/p1.jpg")
         throw new Exception("超过 Int32 范围的 CID 或 UP 主解析失败。");
 
     var nfoFolder = Path.Combine(folder, "nfo");
@@ -39,16 +40,19 @@ using (var videoJson = JsonDocument.Parse("""{"title":"大 CID 测试","pic":"",
     var nfo = XDocument.Load(nfoPath);
     var actor = nfo.Root?.Element("actor");
     if (File.Exists(oldNfo) || (string?)nfo.Root?.Element("title") != video.Title ||
+        (string?)nfo.Root?.Element("thumb") != "https://example.org/p1.jpg" ||
         (string?)actor?.Element("name") != "测试 UP 主" ||
         (string?)actor?.Element("role") != "UP主" ||
         (string?)actor?.Element("thumb") != "https://example.org/avatar?x=1&y=2" ||
         !((string?)nfo.Root?.Element("plot") ?? string.Empty).Contains("https://space.bilibili.com/123456", StringComparison.Ordinal))
         throw new Exception("同名 NFO、UP 主演员信息或旧版 NFO 迁移失败。");
     nfo.Root!.Add(new XElement("genre", "用户自定义"));
+    nfo.Root.SetElementValue("plot", "手动编辑的简介");
     nfo.Save(nfoPath);
     ArchiveService.WriteNfo(video, video.Pages[0], videoPath);
     nfo = XDocument.Load(nfoPath);
-    if (nfo.Root?.Elements("actor").Count() != 1 || (string?)nfo.Root?.Element("genre") != "用户自定义")
+    if (nfo.Root?.Elements("actor").Count() != 1 || (string?)nfo.Root?.Element("genre") != "用户自定义" ||
+        (string?)nfo.Root?.Element("plot") != "手动编辑的简介")
         throw new Exception("再次同步不应重复演员或覆盖用户 NFO 字段。");
 }
 var layoutRoot = Path.Combine(folder, "movie-library");
@@ -66,7 +70,7 @@ new XDocument(new XElement("movie", new XElement("title", "归档标题 - P01 �
 await layoutStore.SaveAsync(new ArchiveRecord { Bvid = bvid, Cid = 101, Title = "归档标题",
     Status = "completed", FilePath = oldPage1 }, CancellationToken.None);
 await layoutService.MigrateExistingArchivesAsync(layoutRoot, CancellationToken.None);
-var single = ArchiveService.MoviePath(layoutRoot, bvid, 1, false);
+var single = ArchiveService.MoviePath(layoutRoot, bvid, 1, 101, false);
 if (!File.Exists(single) || File.Exists(oldPage1) ||
     (await layoutStore.GetAsync(bvid, 101, CancellationToken.None))?.FilePath != single ||
     (string?)XDocument.Load(Path.ChangeExtension(single, ".nfo")).Root?.Element("title") != "归档标题" ||
@@ -77,17 +81,57 @@ Directory.CreateDirectory(Path.GetDirectoryName(oldPage2)!);
 File.WriteAllBytes(oldPage2, [4, 5, 6]);
 await layoutStore.SaveAsync(new ArchiveRecord { Bvid = bvid, Cid = 102, Title = "归档标题",
     Status = "completed", FilePath = oldPage2 }, CancellationToken.None);
-var multiVideo = new VideoInfo(bvid, "归档标题", string.Empty,
-    [new VideoPage(101, 1, "开篇"), new VideoPage(102, 2, "后续")], null);
+var multiVideo = new VideoInfo(bvid, "归档标题", "https://example.org/cover.jpg",
+    [new VideoPage(101, 1, "开篇", "https://example.org/p1.jpg"),
+     new VideoPage(102, 2, "后续", "https://example.org/p2.jpg")], null, "视频的整体简介");
 await layoutService.MigrateVideoArchivesAsync(multiVideo, layoutRoot, CancellationToken.None);
-var part1 = ArchiveService.MoviePath(layoutRoot, bvid, 1, true);
-var part2 = ArchiveService.MoviePath(layoutRoot, bvid, 2, true);
+var part1 = ArchiveService.MoviePath(layoutRoot, bvid, 1, 101, true);
+var part2 = ArchiveService.MoviePath(layoutRoot, bvid, 2, 102, true);
+ArchiveService.WriteNfo(multiVideo, multiVideo.Pages[0], part1);
+ArchiveService.WriteNfo(multiVideo, multiVideo.Pages[1], part2);
+var collection = XDocument.Load(Path.Combine(layoutRoot, bvid + " [boxset]", "collection.xml"));
 if (File.Exists(single) || !File.Exists(part1) || !File.Exists(part2) || File.Exists(oldPage2) ||
     (await layoutStore.GetAsync(bvid, 101, CancellationToken.None))?.FilePath != part1 ||
     (await layoutStore.GetAsync(bvid, 102, CancellationToken.None))?.FilePath != part2 ||
-    (string?)XDocument.Load(Path.ChangeExtension(part1, ".nfo")).Root?.Element("uniqueid") != bvid ||
-    (string?)XDocument.Load(Path.ChangeExtension(part2, ".nfo")).Root?.Element("title") != "归档标题")
-    throw new Exception("新增分 P 后未组成同一电影的连续片段，或 NFO 未同步整理。");
+    (string?)collection.Root?.Element("LocalTitle") != "归档标题" ||
+    (string?)collection.Root?.Element("Overview") != "视频的整体简介" ||
+    (string?)XDocument.Load(Path.ChangeExtension(part1, ".nfo")).Root?.Element("uniqueid") != bvid + ":101" ||
+    (string?)XDocument.Load(Path.ChangeExtension(part1, ".nfo")).Root?.Element("title") != "P01 开篇" ||
+    (string?)XDocument.Load(Path.ChangeExtension(part2, ".nfo")).Root?.Element("title") != "P02 后续" ||
+    !((string?)XDocument.Load(Path.ChangeExtension(part2, ".nfo")).Root?.Element("plot") ?? string.Empty)
+        .Contains("视频的整体简介", StringComparison.Ordinal))
+    throw new Exception("新增分 P 后未生成电影合集，或各分 P 的独立元数据丢失。");
+var previousBvid = "BV1xx411c7mG";
+for (var number = 1; number <= 2; number++)
+{
+    var previousPath = Path.Combine(layoutRoot, previousBvid, $"{previousBvid}-cd{number:D2}.mp4");
+    Directory.CreateDirectory(Path.GetDirectoryName(previousPath)!);
+    File.WriteAllBytes(previousPath, [(byte)number]);
+    new XDocument(new XElement("movie", new XElement("title", "旧版多 P"),
+        new XElement("genre", "保留的分类"),
+        new XElement("uniqueid", new XAttribute("type", "bilibili"), previousBvid)))
+        .Save(Path.ChangeExtension(previousPath, ".nfo"));
+    await layoutStore.SaveAsync(new ArchiveRecord { Bvid = previousBvid, Cid = 200 + number,
+        Title = "旧版多 P", Status = "completed", FilePath = previousPath }, CancellationToken.None);
+}
+await layoutService.MigrateExistingArchivesAsync(layoutRoot, CancellationToken.None);
+var migratedPart = ArchiveService.MoviePath(layoutRoot, previousBvid, 2, 202, true);
+var migratedNfo = XDocument.Load(Path.ChangeExtension(migratedPart, ".nfo"));
+if (!File.Exists(migratedPart) || (string?)migratedNfo.Root?.Element("title") != "P02" ||
+    (string?)migratedNfo.Root?.Element("genre") != "保留的分类" ||
+    (string?)migratedNfo.Root?.Element("uniqueid") != previousBvid + ":202" ||
+    (await layoutStore.GetAsync(previousBvid, 202, CancellationToken.None))?.FilePath != migratedPart)
+    throw new Exception("1.2.4.0 连续片段升级为独立合集条目时丢失视频或 NFO。");
+var backfillState = new SyncState();
+backfillState.Folders[42] = new FolderSyncState { KnownBvids = [previousBvid] };
+await layoutService.QueueMetadataBackfillAsync(backfillState, layoutRoot, [42], CancellationToken.None);
+if (!backfillState.Pending.ContainsKey(previousBvid))
+    throw new Exception("旧版多 P NFO 未加入分批元数据补全队列。");
+var notDownloaded = new VideoInfo("BV1xx411c7mH", "下载尚未成功", string.Empty,
+    [new VideoPage(301, 1, "一"), new VideoPage(302, 2, "二")], null);
+await layoutService.MigrateVideoArchivesAsync(notDownloaded, layoutRoot, CancellationToken.None);
+if (Directory.Exists(Path.Combine(layoutRoot, notDownloaded.Bvid + " [boxset]")))
+    throw new Exception("下载失败前不应出现空电影合集。");
 const long recentCid = 27_293_516_471L;
 using (var videoJson = JsonDocument.Parse("""{"title":"近期视频","pic":"","pages":[{"cid":27293516471,"page":1,"part":"正片"}]}"""))
 {

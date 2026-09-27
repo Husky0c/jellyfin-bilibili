@@ -12,9 +12,10 @@ public sealed record FavoriteFolder(long Id, string Title, int Count);
 public sealed record FavoriteVideo(string Bvid, string Title, bool Available, int PageCount);
 public sealed record FavoritePage(IReadOnlyList<FavoriteVideo> Items, bool HasMore);
 public sealed record FavoriteIds(IReadOnlyList<string> Bvids, int ResourceCount);
-public sealed record VideoPage(long Cid, int Page, string Part);
+public sealed record VideoPage(long Cid, int Page, string Part, string FirstFrame = "");
 public sealed record VideoUploader(long Mid, string Name, string Face);
-public sealed record VideoInfo(string Bvid, string Title, string Cover, IReadOnlyList<VideoPage> Pages, VideoUploader? Uploader);
+public sealed record VideoInfo(string Bvid, string Title, string Cover, IReadOnlyList<VideoPage> Pages,
+    VideoUploader? Uploader, string Description = "");
 public sealed record DashStream(string Url, int Quality, long Bandwidth);
 public sealed record PlayStreams(DashStream Video, DashStream? Audio);
 
@@ -148,7 +149,10 @@ public sealed class BiliApi
     internal static VideoInfo ParseVideoInfo(string bvid, JsonElement data)
     {
         var pages = data.GetProperty("pages").EnumerateArray()
-            .Select(x => new VideoPage(x.GetProperty("cid").GetInt64(), x.GetProperty("page").GetInt32(), x.GetProperty("part").GetString() ?? string.Empty))
+            .Select(x => new VideoPage(x.GetProperty("cid").GetInt64(), x.GetProperty("page").GetInt32(),
+                x.GetProperty("part").GetString() ?? string.Empty,
+                x.TryGetProperty("first_frame", out var frame) && frame.ValueKind == JsonValueKind.String
+                    ? frame.GetString() ?? string.Empty : string.Empty))
             .ToArray();
         VideoUploader? uploader = null;
         if (data.TryGetProperty("owner", out var owner) && owner.ValueKind == JsonValueKind.Object)
@@ -161,7 +165,10 @@ public sealed class BiliApi
                 uploader = new VideoUploader(mid, name, face);
             }
         }
-        return new VideoInfo(bvid, data.GetProperty("title").GetString() ?? bvid, data.GetProperty("pic").GetString() ?? string.Empty, pages, uploader);
+        return new VideoInfo(bvid, data.GetProperty("title").GetString() ?? bvid,
+            data.GetProperty("pic").GetString() ?? string.Empty, pages, uploader,
+            data.TryGetProperty("desc", out var desc) && desc.ValueKind == JsonValueKind.String
+                ? desc.GetString() ?? string.Empty : string.Empty);
     }
 
     public async Task<PlayStreams> GetPlayStreamsAsync(string bvid, long cid, int maxQuality, CancellationToken ct)
