@@ -4,7 +4,7 @@
   "guid": "69080230-518d-47b1-b8a0-70854398506e",
   "name": "Bilibili 收藏归档",
   "owner": "HUSKY0C",
-  "version": "1.3.0.0",
+  "version": "1.3.1.0",
   "status": "Active",
   "autoUpdate": true,
   "targetAbi": "10.10.7.0",
