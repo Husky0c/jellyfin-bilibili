@@ -2,6 +2,30 @@
   {
     "versions": [
       {
+        "version": "1.2.3.1",
+        "changelog": "1.2.3.1 将 B 站视频详情接口的 `62012`（仅 UP 主可见）归入“当前账号不可访问”，与 `-404`、`62002` 一样每天复查，不再作为普通下载失败反复重试。错误记录会显示具体含义；设置页汇总中的“失效”改为“不可访问”。本次日志中的正常视频已完成归档，`62012` 不能通过插件绕过。",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/Husky0c/jellyfin-bilibili/releases/download/v1.2.3.1/BiliArchive_1.2.3.1_Jellyfin-12-anycpu.zip",
+        "checksum": "8d028dece751d85d8340af1e9e8ecd31",
+        "timestamp": "2026-09-27T02:43:42Z"
+      },
+      {
+        "version": "1.2.3.1",
+        "changelog": "1.2.3.1 将 B 站视频详情接口的 `62012`（仅 UP 主可见）归入“当前账号不可访问”，与 `-404`、`62002` 一样每天复查，不再作为普通下载失败反复重试。错误记录会显示具体含义；设置页汇总中的“失效”改为“不可访问”。本次日志中的正常视频已完成归档，`62012` 不能通过插件绕过。",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/Husky0c/jellyfin-bilibili/releases/download/v1.2.3.1/BiliArchive_1.2.3.1_Jellyfin-10.11-anycpu.zip",
+        "checksum": "610e861aa181e03001a961c01f0e5c3b",
+        "timestamp": "2026-09-27T02:43:42Z"
+      },
+      {
+        "version": "1.2.3.1",
+        "changelog": "1.2.3.1 将 B 站视频详情接口的 `62012`（仅 UP 主可见）归入“当前账号不可访问”，与 `-404`、`62002` 一样每天复查，不再作为普通下载失败反复重试。错误记录会显示具体含义；设置页汇总中的“失效”改为“不可访问”。本次日志中的正常视频已完成归档，`62012` 不能通过插件绕过。",
+        "targetAbi": "10.10.7.0",
+        "sourceUrl": "https://github.com/Husky0c/jellyfin-bilibili/releases/download/v1.2.3.1/BiliArchive_1.2.3.1_Jellyfin-10.10-anycpu.zip",
+        "checksum": "026136bc5665cb897a05230e9217dfdb",
+        "timestamp": "2026-09-27T02:43:42Z"
+      },
+      {
         "version": "1.2.3.0",
         "changelog": "1.2.3.0 新增 Jellyfin 插件仓库清单。管理员可在插件页面添加 `https://raw.githubusercontent.com/Husky0c/jellyfin-bilibili/main/manifest.json`，从目录安装与服务端 ABI 匹配的插件；此版本起启用 Jellyfin 的自动更新。后续发布完成后，流水线会将新版本及校验值写入仓库清单。",
         "targetAbi": "12.0.0.0",
