@@ -2,6 +2,30 @@
   {
     "versions": [
       {
+        "version": "1.2.5.0",
+        "changelog": "1.2.5.0 修正多 P 展示：单 P 保持独立电影，多 P 改为 Jellyfin 电影库中的 BV 合集，每个 P 是可单独选择、展示元数据并记录观看进度的电影条目。合集保存整条视频标题与简介；各 P 的同名 NFO 保存分 P 名称、整体简介、UP 主演员、封面来源和独立 BV/CID。B 站接口没有独立分 P 简介时，简介以 P 名称与整条视频简介组成。归档任务会整理 1.2.4.0 的 `cd01/cd02` 文件和更早的 `P序号-CID/video.mp4`，不覆盖目标文件；已归档且仍在所选收藏夹中的视频会逐批补全元数据而不重新下载。迁移前请备份归档目录，完成后重新扫描电影媒体库。建议关闭在线电影元数据提供者。",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/Husky0c/jellyfin-bilibili/releases/download/v1.2.5.0/BiliArchive_1.2.5.0_Jellyfin-12-anycpu.zip",
+        "checksum": "7b6ab9b529335b3d7f1b11736e48fee5",
+        "timestamp": "2026-09-27T03:38:48Z"
+      },
+      {
+        "version": "1.2.5.0",
+        "changelog": "1.2.5.0 修正多 P 展示：单 P 保持独立电影，多 P 改为 Jellyfin 电影库中的 BV 合集，每个 P 是可单独选择、展示元数据并记录观看进度的电影条目。合集保存整条视频标题与简介；各 P 的同名 NFO 保存分 P 名称、整体简介、UP 主演员、封面来源和独立 BV/CID。B 站接口没有独立分 P 简介时，简介以 P 名称与整条视频简介组成。归档任务会整理 1.2.4.0 的 `cd01/cd02` 文件和更早的 `P序号-CID/video.mp4`，不覆盖目标文件；已归档且仍在所选收藏夹中的视频会逐批补全元数据而不重新下载。迁移前请备份归档目录，完成后重新扫描电影媒体库。建议关闭在线电影元数据提供者。",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/Husky0c/jellyfin-bilibili/releases/download/v1.2.5.0/BiliArchive_1.2.5.0_Jellyfin-10.11-anycpu.zip",
+        "checksum": "502d1b4058dc958d1c36e6b1fc1775c2",
+        "timestamp": "2026-09-27T03:38:48Z"
+      },
+      {
+        "version": "1.2.5.0",
+        "changelog": "1.2.5.0 修正多 P 展示：单 P 保持独立电影，多 P 改为 Jellyfin 电影库中的 BV 合集，每个 P 是可单独选择、展示元数据并记录观看进度的电影条目。合集保存整条视频标题与简介；各 P 的同名 NFO 保存分 P 名称、整体简介、UP 主演员、封面来源和独立 BV/CID。B 站接口没有独立分 P 简介时，简介以 P 名称与整条视频简介组成。归档任务会整理 1.2.4.0 的 `cd01/cd02` 文件和更早的 `P序号-CID/video.mp4`，不覆盖目标文件；已归档且仍在所选收藏夹中的视频会逐批补全元数据而不重新下载。迁移前请备份归档目录，完成后重新扫描电影媒体库。建议关闭在线电影元数据提供者。",
+        "targetAbi": "10.10.7.0",
+        "sourceUrl": "https://github.com/Husky0c/jellyfin-bilibili/releases/download/v1.2.5.0/BiliArchive_1.2.5.0_Jellyfin-10.10-anycpu.zip",
+        "checksum": "0fde54acc60aa00309ce87486c7d4e42",
+        "timestamp": "2026-09-27T03:38:48Z"
+      },
+      {
         "version": "1.2.4.0",
         "changelog": "1.2.4.0 优化电影媒体库中的归档展示。每个 BV 对应一个电影条目：单 P 文件直接位于 BV 目录，多 P 按 `cd01`、`cd02` 命名，由 Jellyfin 作为同一影片的连续片段播放。各视频生成同名 NFO，片名使用 B 站视频标题，UP 主演员信息继续保留。归档任务会整理状态记录中仍存在的旧目录和 NFO，不覆盖目标文件；迁移前请备份归档目录，完成后重新扫描媒体库。建议创建电影媒体库并关闭在线电影元数据提供者。多 P 连续片段不提供每 P 独立观看进度。",
         "targetAbi": "12.0.0.0",
