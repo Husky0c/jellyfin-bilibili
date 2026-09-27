@@ -138,5 +138,11 @@ if (ArchiveService.SelectPending(retryState, selectedFolders, baseTime, false).L
 retryState.Pending["BV1xx411c7mD"].NextAttemptAt = baseTime.AddHours(3);
 if (ArchiveService.SelectPending(retryState, selectedFolders, baseTime, true)[0].Bvid != "BV1xx411c7mE")
     throw new Exception("重试后应优先处理其他等待项。");
+if (!ArchiveService.IsUnavailableVideoError(new BiliApiException(62012)) ||
+    !ArchiveService.IsUnavailableVideoError(new BiliApiException(62002)) ||
+    !ArchiveService.IsUnavailableVideoError(new BiliApiException(-404)) ||
+    ArchiveService.IsUnavailableVideoError(new BiliApiException(62004)) ||
+    !new BiliApiException(62012).Message.Contains("仅 UP 主可见", StringComparison.Ordinal))
+    throw new Exception("不可访问视频的错误码分类或提示不正确。");
 
-Console.WriteLine("PASS: 大 CID、UP 主同名 NFO 与旧版迁移、无音轨 DASH、手动重试；BV/CID、增量游标与重试队列持久化；差异检测、退避、配置页、二维码。");
+Console.WriteLine("PASS: 大 CID、UP 主同名 NFO 与旧版迁移、无音轨 DASH、手动重试；不可访问错误码；BV/CID、增量游标与重试队列持久化；差异检测、退避、配置页、二维码。");

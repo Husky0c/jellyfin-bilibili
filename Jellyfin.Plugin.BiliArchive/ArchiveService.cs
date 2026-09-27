@@ -267,7 +267,7 @@ public sealed class ArchiveService
             catch (BiliRateLimitException) { throw; }
             catch (Exception ex)
             {
-                var unavailable = ex is BiliApiException { Code: -404 or 62002 };
+                var unavailable = IsUnavailableVideoError(ex);
                 _logger.LogWarning(ex, "获取 {Bvid} 信息失败", pending.Bvid);
                 await _store.SaveAsync(new ArchiveRecord
                 {
@@ -287,6 +287,9 @@ public sealed class ArchiveService
         state.Pending.Values.Where(x => force || x.NextAttemptAt <= now)
             .Where(x => IsSelected(x.Bvid, state, folderIds))
             .OrderByDescending(x => x.IsNewFavorite).ThenBy(x => x.NextAttemptAt).ThenBy(x => x.DiscoveredAt).Take(10).ToArray();
+
+    internal static bool IsUnavailableVideoError(Exception ex) =>
+        ex is BiliApiException { Code: -404 or 62002 or 62012 };
 
     private static void ScheduleRetry(PendingVideo pending, bool unavailable = false)
     {

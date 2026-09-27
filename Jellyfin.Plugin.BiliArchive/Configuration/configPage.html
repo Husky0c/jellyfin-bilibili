@@ -76,7 +76,7 @@
           const state = await ApiClient.getJSON(endpoint('status'));
           byId('biliPluginVersion').textContent = state.version ? '当前插件版本：' + state.version : '';
           byId('biliLoginStatus').textContent = state.loggedIn ? '已登录，UID：' + state.mid : '未登录或 Cookie 已过期';
-          byId('biliSummary').textContent = '已归档 ' + state.completed + ' 项；待处理 ' + state.pending + ' 项；失败 ' + state.failed + ' 项；失效 ' + state.unavailable + ' 项' +
+          byId('biliSummary').textContent = '已归档 ' + state.completed + ' 项；待处理 ' + state.pending + ' 项；失败 ' + state.failed + ' 项；不可访问 ' + state.unavailable + ' 项' +
             (state.running ? '；正在同步' : '') + (state.pausedUntil ? '；风控冷却至 ' + new Date(state.pausedUntil).toLocaleString() : '') +
             (state.nextCheckAt ? '；下次收藏检查约 ' + new Date(state.nextCheckAt).toLocaleString() : '');
           if (state.loggedIn) await refreshFolders();

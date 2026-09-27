@@ -283,7 +283,13 @@ public sealed class BiliRateLimitException : Exception
 
 public sealed class BiliApiException : Exception
 {
-    public BiliApiException(int code) : base($"B 站 API 返回错误码 {code}。") => Code = code;
+    public BiliApiException(int code) : base(code switch
+    {
+        -404 => "B 站 API 返回错误码 -404：视频不存在或已下架。",
+        62002 => "B 站 API 返回错误码 62002：稿件不可见，当前账号无法访问。",
+        62012 => "B 站 API 返回错误码 62012：仅 UP 主可见，当前账号无法访问。",
+        _ => $"B 站 API 返回错误码 {code}。"
+    }) => Code = code;
 
     public int Code { get; }
 }
