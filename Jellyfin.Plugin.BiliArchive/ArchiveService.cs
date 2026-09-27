@@ -67,6 +67,7 @@ public sealed class ArchiveService
                 return;
             }
             ValidateConfiguration(config);
+            await MigrateExistingArchivesAsync(config.ArchivePath, ct).ConfigureAwait(false);
             var state = await _syncStore.LoadAsync(ct).ConfigureAwait(false);
             var now = DateTimeOffset.UtcNow;
             if (state.LoginRequired || state.PausedUntil > now)
@@ -232,6 +233,7 @@ public sealed class ArchiveService
             {
                 var video = await _api.GetVideoAsync(pending.Bvid, ct).ConfigureAwait(false);
                 if (video.Pages.Count == 0) throw new InvalidDataException("B 站未返回任何视频分 P。");
+                await MigrateVideoArchivesAsync(video, config.ArchivePath, ct).ConfigureAwait(false);
                 var placeholder = await _store.GetAsync(pending.Bvid, 0, ct).ConfigureAwait(false);
                 if (placeholder is not null)
                 {
@@ -307,8 +309,8 @@ public sealed class ArchiveService
     private async Task ArchivePageAsync(VideoInfo video, VideoPage page, PluginConfiguration config, CancellationToken ct)
     {
         var prior = await _store.GetAsync(video.Bvid, page.Cid, ct).ConfigureAwait(false);
-        var folder = Path.Combine(config.ArchivePath, video.Bvid, $"P{page.Page:D2}-{page.Cid}");
-        var final = Path.Combine(folder, "video.mp4");
+        var folder = Path.Combine(config.ArchivePath, video.Bvid);
+        var final = MoviePath(config.ArchivePath, video.Bvid, page.Page, video.Pages.Count > 1);
         if (prior is { Status: "completed", FilePath: not null } && File.Exists(prior.FilePath))
         {
             WriteNfo(video, page, prior.FilePath);
@@ -362,6 +364,132 @@ public sealed class ArchiveService
         }
     }
 
+    internal static string MoviePath(string archivePath, string bvid, int page, bool multiPage) =>
+        Path.Combine(archivePath, bvid, multiPage ? $"{bvid}-cd{page:D2}.mp4" : $"{bvid}.mp4");
+
+    internal async Task MigrateVideoArchivesAsync(VideoInfo video, string archivePath, CancellationToken ct)
+    {
+        var records = (await _store.ListAsync(ct).ConfigureAwait(false))
+            .Where(x => x.Bvid == video.Bvid && x.Status == "completed" && x.FilePath is not null)
+            .ToArray();
+        var multiPage = video.Pages.Count > 1 || records.Length > 1;
+        foreach (var page in video.Pages)
+        {
+            var record = records.FirstOrDefault(x => x.Cid == page.Cid);
+            if (record is not null)
+                await MoveArchiveAsync(record, archivePath, page.Page, multiPage, ct).ConfigureAwait(false);
+        }
+    }
+
+    internal async Task MigrateExistingArchivesAsync(string archivePath, CancellationToken ct)
+    {
+        var records = (await _store.ListAsync(ct).ConfigureAwait(false))
+            .Where(x => x.Status == "completed" && x.FilePath is not null)
+            .GroupBy(x => x.Bvid, StringComparer.Ordinal);
+        foreach (var group in records)
+        {
+            var entries = group.Select(x => (Record: x, Page: StoredPage(x)))
+                .Where(x => x.Page > 0).ToArray();
+            var multiPage = group.Count() > 1;
+            foreach (var (record, page) in entries)
+            {
+                try { await MoveArchiveAsync(record, archivePath, page, multiPage, ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)
+                {
+                    _logger.LogWarning(ex, "整理旧归档 {Bvid} / {Cid} 失败，保留原文件", record.Bvid, record.Cid);
+                }
+            }
+        }
+    }
+
+    private static int StoredPage(ArchiveRecord record)
+    {
+        var path = record.FilePath!;
+        var legacy = LegacyPage(path, record.Cid);
+        if (legacy > 0) return legacy;
+        var name = Path.GetFileNameWithoutExtension(path);
+        if (name == record.Bvid) return 1;
+        var match = Regex.Match(name, "^" + Regex.Escape(record.Bvid) + @"-cd([0-9]+)$",
+            RegexOptions.CultureInvariant);
+        return match.Success && int.TryParse(match.Groups[1].Value, out var page) ? page : 0;
+    }
+
+    private static int LegacyPage(string path, long cid)
+    {
+        var match = Regex.Match(Path.GetFileName(Path.GetDirectoryName(path)) ?? string.Empty,
+            $"^P([0-9]+)-{cid}$", RegexOptions.CultureInvariant);
+        return match.Success && int.TryParse(match.Groups[1].Value, out var page) ? page : 0;
+    }
+
+    private async Task MoveArchiveAsync(ArchiveRecord record, string archivePath, int page, bool multiPage, CancellationToken ct)
+    {
+        var source = record.FilePath!;
+        var target = MoviePath(archivePath, record.Bvid, page, multiPage);
+        var root = Path.GetFullPath(archivePath).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (!Path.GetFullPath(source).StartsWith(root, StringComparison.Ordinal) ||
+            !File.Exists(source) || Path.GetFullPath(source) == Path.GetFullPath(target)) return;
+        if (File.Exists(target)) throw new IOException($"归档迁移目标已存在，请检查：{target}");
+        var sourceNfo = Path.ChangeExtension(source, ".nfo");
+        var targetNfo = Path.ChangeExtension(target, ".nfo");
+        if (File.Exists(targetNfo))
+            throw new IOException($"归档迁移 NFO 目标已存在，请检查：{targetNfo}");
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        var movieNfo = Path.Combine(Path.GetDirectoryName(source)!, "movie.nfo");
+        var originalNfo = File.Exists(sourceNfo) ? sourceNfo : File.Exists(movieNfo) ? movieNfo : null;
+        File.Move(source, target);
+        try
+        {
+            if (originalNfo is not null) File.Move(originalNfo, targetNfo);
+            NormalizeMovieNfo(record, targetNfo);
+            record.FilePath = target;
+            await _store.SaveAsync(record, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            record.FilePath = source;
+            if (originalNfo is not null && File.Exists(targetNfo) && !File.Exists(originalNfo))
+                File.Move(targetNfo, originalNfo);
+            else if (originalNfo is null && File.Exists(targetNfo)) File.Delete(targetNfo);
+            if (File.Exists(target) && !File.Exists(source)) File.Move(target, source);
+            throw;
+        }
+        var sourceFolder = Path.GetDirectoryName(source)!;
+        if (Directory.Exists(sourceFolder) && !Directory.EnumerateFileSystemEntries(sourceFolder).Any())
+            Directory.Delete(sourceFolder);
+        _logger.LogInformation("已整理归档 {Bvid} / {Cid}：{Path}", record.Bvid, record.Cid, target);
+    }
+
+    private static void NormalizeMovieNfo(ArchiveRecord record, string path)
+    {
+        if (!File.Exists(path))
+        {
+            new XDocument(new XElement("movie", new XElement("title", record.Title),
+                new XElement("plot", $"Bilibili {record.Bvid} / CID {record.Cid}"),
+                new XElement("uniqueid", new XAttribute("type", "bilibili"),
+                    new XAttribute("default", "true"), record.Bvid))).Save(path);
+            return;
+        }
+        var nfo = XDocument.Load(path);
+        var root = nfo.Root;
+        if (root is null) return;
+        var changed = false;
+        var title = (string?)root.Element("title");
+        if (title is not null && Regex.IsMatch(title,
+                "^" + Regex.Escape(record.Title) + @" - P[0-9]+ .+$", RegexOptions.CultureInvariant))
+        {
+            root.SetElementValue("title", record.Title);
+            changed = true;
+        }
+        var id = root.Elements("uniqueid").FirstOrDefault(x => (string?)x.Attribute("type") == "bilibili");
+        if (id?.Value == record.Bvid + ":" + record.Cid)
+        {
+            id.Value = record.Bvid;
+            changed = true;
+        }
+        if (changed) nfo.Save(path);
+    }
+
     private async Task MarkUnavailableAsync(FavoriteVideo video, CancellationToken ct)
     {
         var previous = await _store.GetAsync(video.Bvid, 0, ct).ConfigureAwait(false);
@@ -412,8 +540,8 @@ public sealed class ArchiveService
     {
         var nfoPath = Path.ChangeExtension(videoPath, ".nfo");
         var legacyPath = Path.Combine(Path.GetDirectoryName(videoPath)!, "movie.nfo");
-        var title = video.Pages.Count == 1 ? video.Title : $"{video.Title} - P{page.Page:D2} {page.Part}";
-        var id = video.Bvid + ":" + page.Cid;
+        var title = video.Title;
+        var id = video.Bvid;
         var plot = $"Bilibili {video.Bvid} / CID {page.Cid}";
         if (video.Uploader is { Mid: > 0 } creator)
             plot += $"\nUP主：{creator.Name}\nUP主页：https://space.bilibili.com/{creator.Mid}";
@@ -423,6 +551,18 @@ public sealed class ArchiveService
             new XElement("uniqueid", new XAttribute("type", "bilibili"), new XAttribute("default", "true"), id)));
         var root = nfo.Root ?? throw new InvalidDataException($"NFO 没有根元素：{nfoPath}");
         var changed = !File.Exists(nfoPath);
+        var oldTitle = $"{video.Title} - P{page.Page:D2} {page.Part}";
+        if ((string?)root.Element("title") == oldTitle)
+        {
+            root.SetElementValue("title", title);
+            changed = true;
+        }
+        var uniqueId = root.Elements("uniqueid").FirstOrDefault(x => (string?)x.Attribute("type") == "bilibili");
+        if (uniqueId is not null && uniqueId.Value == video.Bvid + ":" + page.Cid)
+        {
+            uniqueId.Value = id;
+            changed = true;
+        }
         if (video.Uploader is { Name: var name } uploader && !string.IsNullOrWhiteSpace(name))
         {
             var actor = root.Elements("actor").FirstOrDefault(x =>

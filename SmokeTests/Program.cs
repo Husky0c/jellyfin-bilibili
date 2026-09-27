@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Xml.Linq;
 using Jellyfin.Plugin.BiliArchive;
+using Microsoft.Extensions.Logging.Abstractions;
 using QRCoder;
 
 var folder = Path.Combine(Path.GetTempPath(), "bili-archive-smoke-" + Guid.NewGuid().ToString("N"));
@@ -50,6 +51,43 @@ using (var videoJson = JsonDocument.Parse("""{"title":"大 CID 测试","pic":"",
     if (nfo.Root?.Elements("actor").Count() != 1 || (string?)nfo.Root?.Element("genre") != "用户自定义")
         throw new Exception("再次同步不应重复演员或覆盖用户 NFO 字段。");
 }
+var layoutRoot = Path.Combine(folder, "movie-library");
+var layoutStore = new ArchiveStore(Path.Combine(folder, "movie-state"));
+var layoutService = new ArchiveService(new BiliApi(layoutStore), layoutStore,
+    new SyncStateStore(Path.Combine(folder, "movie-sync")), NullLogger<ArchiveService>.Instance);
+var bvid = "BV1xx411c7mF";
+var oldPage1 = Path.Combine(layoutRoot, bvid, "P01-101", "video.mp4");
+Directory.CreateDirectory(Path.GetDirectoryName(oldPage1)!);
+File.WriteAllBytes(oldPage1, [1, 2, 3]);
+new XDocument(new XElement("movie", new XElement("title", "归档标题 - P01 开篇"),
+    new XElement("genre", "自定义分类"),
+    new XElement("uniqueid", new XAttribute("type", "bilibili"), bvid + ":101")))
+    .Save(Path.ChangeExtension(oldPage1, ".nfo"));
+await layoutStore.SaveAsync(new ArchiveRecord { Bvid = bvid, Cid = 101, Title = "归档标题",
+    Status = "completed", FilePath = oldPage1 }, CancellationToken.None);
+await layoutService.MigrateExistingArchivesAsync(layoutRoot, CancellationToken.None);
+var single = ArchiveService.MoviePath(layoutRoot, bvid, 1, false);
+if (!File.Exists(single) || File.Exists(oldPage1) ||
+    (await layoutStore.GetAsync(bvid, 101, CancellationToken.None))?.FilePath != single ||
+    (string?)XDocument.Load(Path.ChangeExtension(single, ".nfo")).Root?.Element("title") != "归档标题" ||
+    (string?)XDocument.Load(Path.ChangeExtension(single, ".nfo")).Root?.Element("genre") != "自定义分类")
+    throw new Exception("单 P 旧归档未整理成电影库条目，或手动 NFO 字段丢失。");
+var oldPage2 = Path.Combine(layoutRoot, bvid, "P02-102", "video.mp4");
+Directory.CreateDirectory(Path.GetDirectoryName(oldPage2)!);
+File.WriteAllBytes(oldPage2, [4, 5, 6]);
+await layoutStore.SaveAsync(new ArchiveRecord { Bvid = bvid, Cid = 102, Title = "归档标题",
+    Status = "completed", FilePath = oldPage2 }, CancellationToken.None);
+var multiVideo = new VideoInfo(bvid, "归档标题", string.Empty,
+    [new VideoPage(101, 1, "开篇"), new VideoPage(102, 2, "后续")], null);
+await layoutService.MigrateVideoArchivesAsync(multiVideo, layoutRoot, CancellationToken.None);
+var part1 = ArchiveService.MoviePath(layoutRoot, bvid, 1, true);
+var part2 = ArchiveService.MoviePath(layoutRoot, bvid, 2, true);
+if (File.Exists(single) || !File.Exists(part1) || !File.Exists(part2) || File.Exists(oldPage2) ||
+    (await layoutStore.GetAsync(bvid, 101, CancellationToken.None))?.FilePath != part1 ||
+    (await layoutStore.GetAsync(bvid, 102, CancellationToken.None))?.FilePath != part2 ||
+    (string?)XDocument.Load(Path.ChangeExtension(part1, ".nfo")).Root?.Element("uniqueid") != bvid ||
+    (string?)XDocument.Load(Path.ChangeExtension(part2, ".nfo")).Root?.Element("title") != "归档标题")
+    throw new Exception("新增分 P 后未组成同一电影的连续片段，或 NFO 未同步整理。");
 const long recentCid = 27_293_516_471L;
 using (var videoJson = JsonDocument.Parse("""{"title":"近期视频","pic":"","pages":[{"cid":27293516471,"page":1,"part":"正片"}]}"""))
 {
