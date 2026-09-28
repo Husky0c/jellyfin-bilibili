@@ -1,5 +1,7 @@
 # Jellyfin Bilibili 收藏归档
 
+<img src="assets/icon.png" alt="Bilibili 收藏归档图标" width="128">
+
 面向 Jellyfin 10.10.7（.NET 8）、10.11.x（.NET 9）和 12.x（.NET 10）分别构建的原生插件。使用 Bilibili App 扫码登录，选择自己的收藏夹，轻量检测新增收藏并自动下载。视频以 BV 号、CID 去重；成功归档后即使取消收藏也不会删除本地文件。未下载且已下架的视频无法保证补回。
 
 ## 当前功能

@@ -16,6 +16,7 @@ ABIS = (
     ("10.10", "10.10.7.0"),
 )
 RELEASE_BASE = "https://github.com/Husky0c/jellyfin-bilibili/releases/download"
+ICON_URL = "https://raw.githubusercontent.com/Husky0c/jellyfin-bilibili/main/assets/icon.png"
 
 
 def build_versions(version: str, assets: Path, changelog: str, timestamp: str, meta: dict) -> list[dict]:
@@ -79,6 +80,7 @@ def main() -> None:
         "guid": meta["guid"],
         "name": meta["name"],
         "description": meta["description"],
+        "imageUrl": ICON_URL,
         "owner": meta["owner"],
         "overview": "自动归档 Bilibili 收藏夹视频",
     })
