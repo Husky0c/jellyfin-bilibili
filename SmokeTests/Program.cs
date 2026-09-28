@@ -275,6 +275,10 @@ if (!restored.Folders[42].HasSnapshot || restored.Folders[42].ReconcilePage != 3
 if (SyncPlanner.NextCheckDelay(0, 30, 240, 1).TotalMinutes != 30 ||
     SyncPlanner.NextCheckDelay(5, 30, 240, 1).TotalMinutes != 240 ||
     SyncPlanner.RetryDelay(4, 1).TotalHours != 8 ||
+    SyncPlanner.UnavailableRetryDelay(1).TotalDays != 1 ||
+    SyncPlanner.UnavailableRetryDelay(2).TotalDays != 7 ||
+    SyncPlanner.UnavailableRetryDelay(3).TotalDays != 30 ||
+    SyncPlanner.UnavailableRetryDelay(100).TotalDays != 30 ||
     SyncPlanner.RateLimitDelay(3, 1).TotalHours != 24)
     throw new Exception("自适应或退避间隔计算错误。");
 await syncStore.MarkLoginRestoredAsync(CancellationToken.None);
@@ -312,6 +316,22 @@ if (ArchiveService.SelectPending(retryState, selectedFolders, baseTime, false).L
 retryState.Pending["BV1xx411c7mD"].NextAttemptAt = baseTime.AddHours(3);
 if (ArchiveService.SelectPending(retryState, selectedFolders, baseTime, true)[0].Bvid != "BV1xx411c7mE")
     throw new Exception("重试后应优先处理其他等待项。");
+var unavailableBvid = "BV1xx411c7mD";
+var unavailableRecord = new ArchiveRecord
+{
+    Bvid = unavailableBvid, Cid = 0, Status = "unavailable", UpdatedAt = baseTime
+};
+retryState.Pending[unavailableBvid].Failures = 3;
+retryState.Pending[unavailableBvid].NextAttemptAt = baseTime.AddDays(1);
+var unavailableRecords = new Dictionary<string, ArchiveRecord> { [unavailableBvid] = unavailableRecord };
+if (!ArchiveService.ApplyUnavailableCooldown(retryState, unavailableRecords) ||
+    retryState.Pending[unavailableBvid].NextAttemptAt != baseTime.AddDays(30) ||
+    ArchiveService.ApplyUnavailableCooldown(retryState, unavailableRecords) ||
+    ArchiveService.SelectPending(retryState, selectedFolders, baseTime.AddDays(1), true,
+        unavailableRecords.Keys.ToHashSet()).Any(x => x.Bvid == unavailableBvid) ||
+    !ArchiveService.SelectPending(retryState, selectedFolders, baseTime.AddDays(30), false,
+        unavailableRecords.Keys.ToHashSet()).Any(x => x.Bvid == unavailableBvid))
+    throw new Exception("不可访问视频应按累计失败次数延长冷却，立即同步也不能跳过冷却。");
 if (!ArchiveService.IsUnavailableVideoError(new BiliApiException(62012)) ||
     !ArchiveService.IsUnavailableVideoError(new BiliApiException(62002)) ||
     !ArchiveService.IsUnavailableVideoError(new BiliApiException(-404)) ||
@@ -319,4 +339,4 @@ if (!ArchiveService.IsUnavailableVideoError(new BiliApiException(62012)) ||
     !new BiliApiException(62012).Message.Contains("仅 UP 主可见", StringComparison.Ordinal))
     throw new Exception("不可访问视频的错误码分类或提示不正确。");
 
-Console.WriteLine("PASS: 弹幕 XML/ASS 与旧归档字幕迁移；大 CID、UP 主 NFO、无音轨 DASH、手动重试；不可访问错误码；状态与队列持久化；差异检测、退避、配置页、二维码。");
+Console.WriteLine("PASS: 弹幕 XML/ASS 与旧归档字幕迁移；大 CID、UP 主 NFO、无音轨 DASH、手动重试；不可访问错误码与冷却；状态与队列持久化；差异检测、退避、配置页、二维码。");

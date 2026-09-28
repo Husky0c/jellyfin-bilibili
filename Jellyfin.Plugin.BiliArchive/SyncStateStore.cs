@@ -133,6 +133,13 @@ public static class SyncPlanner
         return TimeSpan.FromHours(hours * Math.Clamp(jitter, 0.9, 1.1));
     }
 
+    public static TimeSpan UnavailableRetryDelay(int failures) => failures switch
+    {
+        <= 1 => TimeSpan.FromDays(1),
+        2 => TimeSpan.FromDays(7),
+        _ => TimeSpan.FromDays(30)
+    };
+
     public static TimeSpan RateLimitDelay(int occurrences, double jitter)
     {
         var hours = Math.Min(24, 6 << Math.Min(Math.Max(0, occurrences - 1), 2));

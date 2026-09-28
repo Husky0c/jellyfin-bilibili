@@ -47,7 +47,7 @@
       </div>
       <button is="emby-button" type="submit" class="raised button-submit emby-button">保存设置</button>
     </form>
-    <p>常规扫描只比较收藏夹 BV 清单；旧内容按页轮换复核。后台任务每 15 分钟检查是否到期，实际请求间隔随活跃度在上面的范围内调整。Cookie 过期需重新扫码；风控时会自动冷却。会员画质仅在账号有权限时可下载。弹幕会另存为视频旁的 .danmaku.ass 字幕；媒体库刷新后，可在播放时选择弹幕轨道。旧归档会分批补齐。</p>
+    <p>常规扫描只比较收藏夹 BV 清单；旧内容按页轮换复核。后台任务每 15 分钟检查是否到期，实际请求间隔随活跃度在上面的范围内调整。不可访问视频按失败次数在 1 天、7 天、30 天后复查，“立即同步”不会跳过冷却。Cookie 过期需重新扫码；风控时会自动冷却。会员画质仅在账号有权限时可下载。弹幕会另存为视频旁的 .danmaku.ass 字幕；媒体库刷新后，可在播放时选择弹幕轨道。旧归档会分批补齐。</p>
     <button id="biliRunButton" is="emby-button" type="button" class="raised emby-button">立即同步</button>
     <p id="biliRunHint"></p>
     <h3>归档状态</h3>

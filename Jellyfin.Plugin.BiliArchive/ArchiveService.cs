@@ -70,6 +70,11 @@ public sealed class ArchiveService
             ValidateConfiguration(config);
             await MigrateExistingArchivesAsync(config.ArchivePath, ct).ConfigureAwait(false);
             var state = await _syncStore.LoadAsync(ct).ConfigureAwait(false);
+            var records = await _store.ListAsync(ct).ConfigureAwait(false);
+            var unavailableRecords = records.Where(x => x.Cid == 0 && x.Status == "unavailable")
+                .ToDictionary(x => x.Bvid, StringComparer.Ordinal);
+            if (ApplyUnavailableCooldown(state, unavailableRecords))
+                await _syncStore.SaveAsync(state, ct).ConfigureAwait(false);
             var now = DateTimeOffset.UtcNow;
             if (state.LoginRequired || state.PausedUntil > now)
             {
@@ -107,7 +112,6 @@ public sealed class ArchiveService
                     }
                     if (selected.Length != config.FolderIds.Distinct().Count())
                         await _syncStore.SaveAsync(state, ct).ConfigureAwait(false);
-                    var records = await _store.ListAsync(ct).ConfigureAwait(false);
                     var completed = records.Where(x => x.Status == "completed" && x.FilePath is not null && File.Exists(x.FilePath))
                         .Select(x => x.Bvid).ToHashSet(StringComparer.Ordinal);
                     var failed = records.Where(x => x.Status is "failed" or "downloading").Select(x => x.Bvid)
@@ -146,7 +150,16 @@ public sealed class ArchiveService
                     }
                 }
 
-                await ProcessPendingAsync(state, config, progress, force, ct).ConfigureAwait(false);
+                if (pollDue || reconcileDue)
+                {
+                    unavailableRecords = (await _store.ListAsync(ct).ConfigureAwait(false))
+                        .Where(x => x.Cid == 0 && x.Status == "unavailable")
+                        .ToDictionary(x => x.Bvid, StringComparer.Ordinal);
+                    if (ApplyUnavailableCooldown(state, unavailableRecords))
+                        await _syncStore.SaveAsync(state, ct).ConfigureAwait(false);
+                }
+                await ProcessPendingAsync(state, config, progress, force,
+                    unavailableRecords.Keys.ToHashSet(StringComparer.Ordinal), ct).ConfigureAwait(false);
                 state.RateLimitCount = 0;
                 state.PausedUntil = null;
                 await _syncStore.SaveAsync(state, ct).ConfigureAwait(false);
@@ -224,9 +237,10 @@ public sealed class ArchiveService
         folderState.NextReconcileAt = now.Add(page.HasMore ? TimeSpan.FromHours(3) : TimeSpan.FromDays(1));
     }
 
-    private async Task ProcessPendingAsync(SyncState state, PluginConfiguration config, IProgress<double>? progress, bool force, CancellationToken ct)
+    private async Task ProcessPendingAsync(SyncState state, PluginConfiguration config, IProgress<double>? progress,
+        bool force, IReadOnlySet<string> unavailableBvids, CancellationToken ct)
     {
-        var due = SelectPending(state, config.FolderIds, DateTimeOffset.UtcNow, force);
+        var due = SelectPending(state, config.FolderIds, DateTimeOffset.UtcNow, force, unavailableBvids);
         for (var index = 0; index < due.Length; index++)
         {
             ct.ThrowIfCancellationRequested();
@@ -287,10 +301,25 @@ public sealed class ArchiveService
         }
     }
 
-    internal static PendingVideo[] SelectPending(SyncState state, IReadOnlyCollection<long> folderIds, DateTimeOffset now, bool force) =>
-        state.Pending.Values.Where(x => force || x.NextAttemptAt <= now)
+    internal static PendingVideo[] SelectPending(SyncState state, IReadOnlyCollection<long> folderIds, DateTimeOffset now,
+        bool force, IReadOnlySet<string>? unavailableBvids = null) =>
+        state.Pending.Values.Where(x => x.NextAttemptAt <= now || (force && !(unavailableBvids?.Contains(x.Bvid) ?? false)))
             .Where(x => IsSelected(x.Bvid, state, folderIds))
             .OrderByDescending(x => x.IsNewFavorite).ThenBy(x => x.NextAttemptAt).ThenBy(x => x.DiscoveredAt).Take(10).ToArray();
+
+    internal static bool ApplyUnavailableCooldown(SyncState state, IReadOnlyDictionary<string, ArchiveRecord> unavailableRecords)
+    {
+        var changed = false;
+        foreach (var pending in state.Pending.Values)
+        {
+            if (pending.Failures <= 0 || !unavailableRecords.TryGetValue(pending.Bvid, out var record)) continue;
+            var nextAttempt = record.UpdatedAt.Add(SyncPlanner.UnavailableRetryDelay(pending.Failures));
+            if (pending.NextAttemptAt >= nextAttempt) continue;
+            pending.NextAttemptAt = nextAttempt;
+            changed = true;
+        }
+        return changed;
+    }
 
     internal async Task QueueMetadataBackfillAsync(SyncState state, string archivePath,
         IReadOnlyCollection<long> folderIds, CancellationToken ct)
@@ -333,8 +362,8 @@ public sealed class ArchiveService
 
     private static void ScheduleRetry(PendingVideo pending, bool unavailable = false)
     {
-        pending.Failures++;
-        var delay = unavailable ? TimeSpan.FromHours(24) : SyncPlanner.RetryDelay(pending.Failures, Jitter());
+        if (pending.Failures < int.MaxValue) pending.Failures++;
+        var delay = unavailable ? SyncPlanner.UnavailableRetryDelay(pending.Failures) : SyncPlanner.RetryDelay(pending.Failures, Jitter());
         pending.NextAttemptAt = DateTimeOffset.UtcNow.Add(delay);
         pending.IsNewFavorite = false;
     }
